@@ -1,0 +1,81 @@
+name: Sync Source & Build
+
+on:
+  schedule:
+    # 每12小时运行一次（UTC 0:00 和 12:00 = 北京时间 8:00 和 20:00）
+    - cron: "0 */12 * * *"
+  workflow_dispatch: # 允许在 GitHub 页面手动点击触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 允许推送代码到仓库
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 完整克隆，便于对比差异
+
+      - name: Download latest source zip
+        run: |
+          echo "📥 开始下载 短剧库.zip ..."
+          curl -L --fail -o 短剧库.zip "https://www.252035.xyz/短剧库.zip"
+          ls -lh 短剧库.zip
+
+      - name: Extract and sync files
+        run: |
+          echo "📦 解压并同步文件 ..."
+
+          # 1. 清理旧源码（保留 .git、.github、.gitignore、workflow 文件）
+          find . -maxdepth 1 \
+            ! -name '.' \
+            ! -name '.git' \
+            ! -name '.github' \
+            ! -name '.gitignore' \
+            ! -name '短剧库.zip' \
+            -exec rm -rf {} +
+
+          # 2. 解压到临时目录
+          mkdir -p temp_extract
+          unzip -o 短剧库.zip -d temp_extract
+
+          # 3. 如果 zip 内嵌套了根目录，把内容移出来（扁平化）
+          if [ $(ls temp_extract | wc -l) -eq 1 ]; then
+            mv temp_extract/*/* . 2>/dev/null || mv temp_extract/* . 
+          else
+            mv temp_extract/* . 
+          fi
+
+          # 4. 清理临时文件
+          rm -rf temp_extract 短剧库.zip
+          rm -rf .DS_Store
+
+          echo "✅ 同步完成，当前目录结构："
+          ls -la
+
+      - name: Check for changes
+        id: check
+        run: |
+          git add .
+          if git diff --cached --quiet; then
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+            echo "🔄 无变化，跳过推送"
+          else
+            echo "no_changes=false" >> $GITHUB_OUTPUT
+            echo "🆕 检测到变化，准备推送"
+            git status --short
+          fi
+
+      - name: Commit and push
+        if: steps.check.outputs.no_changes == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: auto-sync from 短剧库.zip ($(date -u '+%Y-%m-%d %H:%M UTC'))"
+          git push origin main
+
+      - name: Done
+        run: |
+          echo "🎉 代码已推送，将自动触发 build-push.yml 构建 Docker 镜像"
