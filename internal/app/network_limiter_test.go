@@ -18,7 +18,7 @@ func TestCatalogBlockReasonSurvivesCooldown(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		_, err := d.fetchProviderText(context.Background(), "https://blocked.example/text", "")
 		var backoff *requestBackoff
-		if !errors.As(err, &backoff) || !strings.Contains(err.Error(), "Cloudflare 已阻止当前网络访问") || strings.Contains(err.Error(), "sensitive-ray-id") {
+		if !errors.As(err, &backoff) || !strings.Contains(err.Error(), "Cloudflare 拒绝了当前请求") || strings.Contains(err.Error(), "sensitive-ray-id") {
 			t.Fatal("block reason was lost or raw page was exposed", err)
 		}
 	}
@@ -50,5 +50,29 @@ func TestCatalogBackgroundBackoffStaysSeparate(t *testing.T) {
 				t.Fatal("site-wide rate limit was ignored")
 			}
 		})
+	}
+}
+
+func TestCatalogChallenge200StopsWithoutPublishingSuccess(t *testing.T) {
+	var calls atomic.Int32
+	d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		response := rankingHTTPResponse(request, 200, "<title>Just a moment...</title>Cloudflare fixture")
+		response.Header.Set("Cf-Mitigated", "challenge")
+		return response, nil
+	})
+	for index := 0; index < 2; index++ {
+		body, err := d.fetchProviderText(context.Background(), "https://challenge.example/text", "")
+		var backoff *requestBackoff
+		if body != "" || !errors.As(err, &backoff) || !strings.Contains(err.Error(), "浏览器验证") {
+			t.Fatal("challenge response treated as successful content", err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("challenge repeated requests during cooldown")
+	}
+	response := &http.Response{StatusCode: 200, Header: make(http.Header)}
+	if catalogResponseBlockReason(response, []byte("<title>Local fixture</title>Just a moment, Cloudflare text in a description")) != "" {
+		t.Fatal("ordinary description was mistaken for a challenge")
 	}
 }

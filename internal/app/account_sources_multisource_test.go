@@ -155,6 +155,7 @@ func TestSourceRevocationClosesStreamsAndRejectsStalePagesAndExports(t *testing.
 		body         any
 	}{
 		{http.MethodGet, "/api/ui/search?q=test", nil},
+		{http.MethodGet, "/api/ui/search/suggestions?q=test", nil},
 		{http.MethodPost, "/api/ui/recommendations", map[string]any{"genre": "short_play", "offset": 0}},
 	} {
 		if result := member.request(t, test.method, test.path, test.body); result.Code != http.StatusForbidden {

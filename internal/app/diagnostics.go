@@ -16,6 +16,11 @@ const diagnosticLogBytes = 5 * 1024 * 1024
 const diagnosticLogBackups = 2
 
 type diagnosticEvent struct {
+	HTTPStatus         int       `json:"httpStatus,omitempty"`
+	Client             string    `json:"client,omitempty"`
+	Protocol           string    `json:"protocol,omitempty"`
+	CFRay              string    `json:"cfRay,omitempty"`
+	ResponseType       string    `json:"responseType,omitempty"`
 	RequestedQuality   int       `json:"requestedQuality,omitempty"`
 	Time               time.Time `json:"time"`
 	Level              string    `json:"level"`

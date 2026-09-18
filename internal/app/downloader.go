@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,6 +37,9 @@ type Downloader struct {
 	legacy                *legacyAPIClient
 	rankings              rankingCache
 	diagnostics           *diagnosticLog
+	directoryMu           sync.Mutex
+	downloadDirectories   map[string]string
+	downloadGrouping      *bool
 }
 
 func NewDownloader(cfg Config) *Downloader {
@@ -71,7 +75,20 @@ func NewDownloader(cfg Config) *Downloader {
 	transport.Proxy = router.proxy
 	resolver := newSafeDNSDialer(transport)
 	transport.DialContext = resolver.DialContext
-	return &Downloader{cfg: cfg, client: &http.Client{Transport: newCDNTransport(transport, resolver), Timeout: 45 * time.Second}, providerHosts: map[string]string{}, limiter: newRequestLimiter(cfg.RequestConcurrency, time.Duration(cfg.RequestIntervalMS)*time.Millisecond), proxyRouter: router, diagnostics: newDiagnosticLog(cfg.dataDirectory())}
+	downloader := &Downloader{cfg: cfg, providerHosts: map[string]string{}, limiter: newRequestLimiter(cfg.RequestConcurrency, time.Duration(cfg.RequestIntervalMS)*time.Millisecond), proxyRouter: router, diagnostics: newDiagnosticLog(cfg.dataDirectory())}
+	images := newImageTransport(newHuangguoBrowserTransport(newCDNTransport(transport, resolver), downloader), transport)
+	images.lookup = func(ctx context.Context, host string) ([]string, error) {
+		if protectedCDNHost(host) {
+			return resolver.lookup(ctx, host)
+		}
+		return net.DefaultResolver.LookupHost(ctx, host)
+	}
+	images.fallback = func(ctx context.Context, host string) ([]string, error) {
+		entry, err := resolver.lookupEntry(ctx, host, cdnAlternateSubnet)
+		return entry.addresses, err
+	}
+	downloader.client = &http.Client{Transport: images, Timeout: 45 * time.Second}
+	return downloader
 }
 
 func (d *Downloader) DownloadEpisode(ctx context.Context, task Task) error {

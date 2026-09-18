@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"math"
@@ -133,10 +132,16 @@ func (app *UIApp) handleEmbyExport(writer http.ResponseWriter, request *http.Req
 	}
 	app.mu.Lock()
 	var drama Drama
+	grouped := app.cfg.GroupBySource
 	for _, item := range app.dramas {
 		if item.ID == input.DramaID {
 			drama = item
 			break
+		}
+	}
+	if drama.ID == "" {
+		if merged := app.merges[input.DramaID]; merged != nil && merged.Status == "success" {
+			drama = Drama{ID: input.DramaID, Title: merged.DramaTitle, Source: sourceFromDramaID(input.DramaID)}
 		}
 	}
 	app.mu.Unlock()
@@ -146,12 +151,13 @@ func (app *UIApp) handleEmbyExport(writer http.ResponseWriter, request *http.Req
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
 	defer cancel()
-	title, chapters, err := app.downloader.GetDramaChapters(ctx, drama.ID)
+	merged := app.embyMergedRecord(drama.ID)
+	title, chapters, err := app.embyExportChapters(ctx, drama.ID, merged)
 	if err != nil {
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "读取分集失败：" + app.redactError(err)})
 		return
 	}
-	if len(chapters) == 0 || len(chapters) > 2000 {
+	if len(chapters) == 0 && merged == nil || len(chapters) > 2000 {
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "可导出分集数无效"})
 		return
 	}
@@ -171,7 +177,17 @@ func (app *UIApp) handleEmbyExport(writer http.ResponseWriter, request *http.Req
 	if scope := sourceScope(request.Context()); scope != nil {
 		owner = scope.AccountID
 	}
-	body, err := buildEmbyArchive(drama, chapters, base, key, owner)
+	folder := embyFolderName(drama)
+	if grouped {
+		folder = dramaSourceFolder(drama) + "/" + folder
+	}
+	manager := app.embySyncer()
+	manager.mu.Lock()
+	if previous := manager.document.Entries[drama.ID].Folder; previous != "" && validEmbyFolder(previous) {
+		folder = previous
+	}
+	manager.mu.Unlock()
+	body, err := buildEmbyArchiveInFolder(drama, chapters, base, key, owner, folder, merged)
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "生成 Emby 分集文件失败"})
 		return
@@ -187,58 +203,35 @@ func buildEmbyArchive(drama Drama, chapters []Chapter, base string, key []byte, 
 	if len(accounts) > 0 {
 		owner = accounts[0]
 	}
+	return buildEmbyArchiveInFolder(drama, chapters, base, key, owner, embyFolderName(drama), nil)
+}
+
+func buildEmbyArchiveInFolder(drama Drama, chapters []Chapter, base string, key []byte, owner, folder string, merged *embyMergedRecord) ([]byte, error) {
+	if folder == "" || !validEmbyFolder(folder) {
+		return nil, errors.New("Emby 导出目录无效")
+	}
+	var records []embyChapter
+	var err error
+	if len(chapters) > 0 || merged == nil {
+		records, err = embyChapterRecords(drama.ID, chapters, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var buffer bytes.Buffer
 	archive := zip.NewWriter(&buffer)
-	title := drama.DisplayTitle()
-	folder := []rune(safeFilename(title))
-	for len(string(folder)) > 180 {
-		folder = folder[:len(folder)-1]
-	}
-	identity := sha256.Sum256([]byte(drama.ID))
-	prefix := string(folder) + " [" + hex.EncodeToString(identity[:8]) + "]/"
-	write := func(name string, body []byte) error {
+	prefix := folder + "/"
+	err = writeEmbyFiles(drama, records, base, key, owner, func(name string, body []byte) error {
 		file, err := archive.Create(prefix + name)
 		if err != nil {
 			return err
 		}
 		_, err = file.Write(body)
 		return err
-	}
-	show := struct {
-		XMLName xml.Name `xml:"tvshow"`
-		Title   string   `xml:"title"`
-		Plot    string   `xml:"plot,omitempty"`
-	}{Title: title, Plot: firstNonEmpty(drama.Desc, drama.Intro)}
-	body, err := xml.MarshalIndent(show, "", "  ")
+	}, merged)
 	if err != nil {
+		archive.Close()
 		return nil, err
-	}
-	if err = write("tvshow.nfo", append([]byte(xml.Header), body...)); err != nil {
-		return nil, err
-	}
-	for index, chapter := range chapters {
-		query := url.Values{"id": {drama.ID}, "chapter": {chapter.ID}, "key": {embyToken(key, drama.ID, chapter.ID, owner)}}
-		if owner != "" {
-			query.Set("account", owner)
-		}
-		path := fmt.Sprintf("Season 01/S01E%03d", index+1)
-		if err = write(path+".strm", []byte(base+"/api/emby/stream.m3u8?"+query.Encode()+"\n")); err != nil {
-			return nil, err
-		}
-		episode := struct {
-			XMLName xml.Name `xml:"episodedetails"`
-			Title   string   `xml:"title"`
-			Show    string   `xml:"showtitle"`
-			Season  int      `xml:"season"`
-			Episode int      `xml:"episode"`
-		}{Title: firstNonEmpty(chapter.Title, "第 "+chapter.EpisodeString(index+1)+" 集"), Show: title, Season: 1, Episode: index + 1}
-		body, err = xml.MarshalIndent(episode, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-		if err = write(path+".nfo", append([]byte(xml.Header), body...)); err != nil {
-			return nil, err
-		}
 	}
 	if err = archive.Close(); err != nil {
 		return nil, err
@@ -268,7 +261,7 @@ func (app *UIApp) embyTask(ctx context.Context, id, chapterID string) (Task, str
 	return Task{}, "", errors.New("此分集已不可用，请更新剧库并重新导出")
 }
 
-func (app *UIApp) handleEmbyStream(writer http.ResponseWriter, request *http.Request) {
+func (app *UIApp) handleEmbyLegacyStream(writer http.ResponseWriter, request *http.Request) {
 	id, chapter, ok := app.authorizeEmby(writer, request)
 	if !ok {
 		return
@@ -277,58 +270,16 @@ func (app *UIApp) handleEmbyStream(writer http.ResponseWriter, request *http.Req
 		writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		return
 	}
-	sessionID := randomHex(24)
-	if sessionID == "" {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "无法创建播放会话"})
+	session := app.acquireEmbyPlayback(writer, request, id, chapter, "", true)
+	if session == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
-	defer cancel()
-	app.playbackMu.Lock()
-	if len(app.playbacks) >= playbackSessionLimit {
-		app.playbackMu.Unlock()
-		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "同时播放数量已达上限，请稍后再试"})
-		return
-	}
-	if app.playbacks == nil {
-		app.playbacks = make(map[string]*playbackSession)
-	}
-	session := &playbackSession{accountID: request.URL.Query().Get("account"), dramaID: id, id: sessionID, run: 1, state: "opening", expires: time.Now().Add(playbackIdleTimeout), cancel: cancel}
-	session.timer = time.AfterFunc(playbackIdleTimeout, func() { app.expirePlayback(sessionID) })
-	app.playbacks[sessionID] = session
-	app.playbackMu.Unlock()
-	ready := false
-	defer func() {
-		if !ready {
-			app.closePlayback(sessionID)
-		}
-	}()
-	task, downloadID, err := app.embyTask(ctx, id, chapter)
-	if err != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "解析 Emby 分集失败：" + app.redactError(err)})
-		return
-	}
-	cache := newPlaybackNative(app, context.Background(), task, downloadID, 0, 0, false)
-	app.playbackMu.Lock()
-	if app.playbacks[sessionID] != session || ctx.Err() != nil {
-		app.playbackMu.Unlock()
-		cache.Close()
-		return
-	}
-	session.tasks = []Task{task}
-	session.native = cache
-	session.cancel = cache.Close
-	app.playbackMu.Unlock()
-	cache.start()
-	if _, err = cache.segment(ctx, 0); err != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "准备 Emby 播放失败：" + app.redactError(err)})
-		return
-	}
-	_, duration, _ := cache.metadata()
-	if duration <= 0 || duration > 24*60*60 || math.IsNaN(duration) || math.IsInf(duration, 0) {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "未取得有效播放时长"})
-		return
-	}
+	defer app.releaseEmbyPlayback(session)
+	app.serveEmbyPlaylist(writer, request, session)
+}
+
+func (app *UIApp) serveEmbyPlaylist(writer http.ResponseWriter, request *http.Request, session *playbackSession) {
+	id, chapter, sessionID, duration := session.dramaID, session.tasks[0].Chapter.ID, session.id, session.duration
 	var playlist strings.Builder
 	fmt.Fprintf(&playlist, "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:%d\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n", playbackNativeSegmentSeconds)
 	for part, count := 0, int(math.Ceil(duration/playbackNativeSegmentSeconds)); part < count; part++ {
@@ -339,17 +290,6 @@ func (app *UIApp) handleEmbyStream(writer http.ResponseWriter, request *http.Req
 		fmt.Fprintf(&playlist, "#EXTINF:%.6f,\nsegment.ts?%s\n", math.Min(playbackNativeSegmentSeconds, duration-float64(part*playbackNativeSegmentSeconds)), query.Encode())
 	}
 	playlist.WriteString("#EXT-X-ENDLIST\n")
-	app.playbackMu.Lock()
-	if app.playbacks[sessionID] == session {
-		session.state = "streaming"
-		session.duration = duration
-		app.touchPlaybackLocked(session)
-		ready = true
-	}
-	app.playbackMu.Unlock()
-	if !ready {
-		return
-	}
 	writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	http.ServeContent(writer, request, "index.m3u8", time.Time{}, strings.NewReader(playlist.String()))
 }
@@ -365,23 +305,29 @@ func (app *UIApp) handleEmbySegment(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "分片编号无效"})
 		return
 	}
-	app.playbackMu.Lock()
-	session := app.playbacks[query.Get("session")]
-	if session == nil || session.native == nil || len(session.tasks) != 1 || session.tasks[0].DramaID != id || session.tasks[0].Chapter.ID != chapter {
-		app.playbackMu.Unlock()
-		writeJSON(writer, http.StatusGone, map[string]string{"error": "播放已过期，请重新播放"})
+	if query.Get("session") == "" {
+		app.writeEmbyPlaybackError(writer, request, http.StatusGone, "播放已过期，请重新播放")
 		return
 	}
+	session := app.acquireEmbyPlayback(writer, request, id, chapter, query.Get("session"), true)
+	if session == nil {
+		return
+	}
+	defer app.releaseEmbyPlayback(session)
 	cache := session.native
-	app.touchPlaybackLocked(session)
-	app.playbackMu.Unlock()
+	if cache == nil {
+		app.writeEmbyPlaybackError(writer, request, http.StatusGone, "播放格式已变化，请重新播放")
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
 	defer cancel()
 	body, err := cache.segment(ctx, part)
 	if err != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "读取 Emby 分片失败：" + app.redactError(err)})
+		app.writeEmbyPlaybackError(writer, request, http.StatusBadGateway, "读取 Emby 分片失败："+app.redactError(err))
 		return
 	}
+	active := &playbackRunContext{id: session.id, run: session.run, session: session, ctx: cache.ctx}
+	writer = &playbackActivityWriter{ResponseWriter: writer, app: app, run: active}
 	writer.Header().Set("Content-Type", "video/mp2t")
 	http.ServeContent(writer, request, "segment.ts", time.Time{}, bytes.NewReader(body))
 }

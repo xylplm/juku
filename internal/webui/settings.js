@@ -1,15 +1,17 @@
 import { $, element, empty, button, setMessage, api, post, valueText, firstNonEmpty, dramaTitle, watchLabel, historySuffix, normalizeSource, sourceKey, sourceLabel, categoryName, episodeCount, coverURL, tagsText, dramaSearchText, rebuildOptions, number, formatBytes, formatTime, statusText, releaseText, phaseText, progressText, progressBar, episodeLabel, groupStats } from './ui-core.js';
 
+import { createPlaybackSettings } from './playback-settings.js';
+
 export function createSettings(app) {
   let config = {};
-function refreshConfigFields(){ $('downloadLocation').textContent=config.outputDir||'尚未设置';$('downloadLocation').title=config.outputDir||''; $('downloadDirectory').value=config.outputDirSetting||config.outputDir||'./短剧下载';$('downloadDirectoryHint').textContent=(config.restartRequired?'已保存新目录，重启后生效。':'')+'选择程序所在电脑的文件夹，或输入相对/绝对路径。重启后新合集使用新目录，原任务和文件保留。';$('downloadConcurrency').value=config.concurrency||2;$('requestConcurrency').value=config.requestConcurrency||2;$('requestInterval').value=config.requestIntervalMs||500;$('proxyMode').value=config.proxyMode||'auto';$('proxyURL').value=config.proxyURL||'';$('proxyUsername').value='';$('proxyPassword').value='';$('proxyPassword').placeholder=config.proxyHasAuth?'已保存，留空保留认证':'';updateProxyFields();$('configText').textContent='当前输出：'+(config.outputDir||'')+' · 下载并发 '+(config.concurrency||2)+' · '+(config.network||'')+' · FFmpeg '+(config.ffmpeg||''); }
+function refreshConfigFields(){ $('groupBySource').checked=Boolean(config.groupBySource); $('downloadLocation').textContent=config.outputDir||'尚未设置';$('downloadLocation').title=config.outputDir||''; $('downloadDirectory').value=config.outputDirSetting||config.outputDir||'./短剧下载';$('downloadDirectoryHint').textContent=(config.restartRequired?'已保存新目录，重启后生效。':'')+'选择程序所在电脑的文件夹，或输入相对/绝对路径。重启后新合集使用新目录，原任务和文件保留。';$('downloadConcurrency').value=config.concurrency||2;$('requestConcurrency').value=config.requestConcurrency||2;$('requestInterval').value=config.requestIntervalMs||500;$('proxyMode').value=config.proxyMode||'auto';$('proxyURL').value=config.proxyURL||'';$('proxyUsername').value='';$('proxyPassword').value='';$('proxyPassword').placeholder=config.proxyHasAuth?'已保存，留空保留认证':'';updateProxyFields();$('configText').textContent='当前输出：'+(config.outputDir||'')+' · 下载并发 '+(config.concurrency||2)+' · '+(config.network||'')+' · FFmpeg '+(config.ffmpeg||''); }
 
 function updateProxyFields(){const disabled=$('proxyMode').value!=='manual';for(const name of ['proxyURL','proxyUsername','proxyPassword'])$(name).disabled=disabled;}
 
 async function loadConfig(){try{config=await api('/api/ui/config');refreshConfigFields();}catch(error){$('configText').textContent='配置读取失败：'+error.message;}}
 
 async function saveSettings(){
-    const settings={outputDir:$('downloadDirectory').value.trim(),concurrency:number($('downloadConcurrency').value),requestConcurrency:number($('requestConcurrency').value),requestIntervalMs:number($('requestInterval').value)};
+    const settings={groupBySource:$('groupBySource').checked,outputDir:$('downloadDirectory').value.trim(),concurrency:number($('downloadConcurrency').value),requestConcurrency:number($('requestConcurrency').value),requestIntervalMs:number($('requestInterval').value)};
     try{
       const mode=$('proxyMode').value;if(mode!=='manual')settings.proxyURL=mode;else{const raw=$('proxyURL').value.trim();const username=$('proxyUsername').value;const password=$('proxyPassword').value;if(!(config.proxyHasAuth&&config.proxyMode==='manual'&&raw===config.proxyURL&&!username&&!password)){const endpoint=new URL(raw);if(!['http:','https:','socks5:','socks5h:'].includes(endpoint.protocol))throw new Error('仅支持 HTTP/HTTPS/SOCKS5 代理');if(username||password){endpoint.username=username;endpoint.password=password;}settings.proxyURL=endpoint.toString();}}
       $('saveSettingsBtn').disabled=true;config=await post('/api/ui/config',settings);refreshConfigFields();$('settingsStatus').textContent=config.restartRequired?'设置已保存；下载目录重启后生效，当前任务保持原路径':'设置已保存并应用';
@@ -56,7 +58,7 @@ function init() {
   $('themeSelect').value = window.JukuTheme.get();
   $('themeSelect').addEventListener('change', () => window.JukuTheme.set($('themeSelect').value));
   document.addEventListener('themechange', event => {$('themeSelect').value = event.detail;});
-  return admin ? loadConfig() : Promise.resolve();
+  return admin ? Promise.all([loadConfig(), createPlaybackSettings().init()]) : Promise.resolve();
 }
 return {init, config: () => config};
 

@@ -8,6 +8,7 @@ import { createDetails } from './details.js';
 import { initializeViewer } from './viewer.js';
 import { createAccount } from './account.js';
 import { createUsers } from './users.js';
+import { createEmby } from './emby.js';
 
 const app = {api, post};
 app.play = (id, title) => {
@@ -24,6 +25,7 @@ app.following = createFollowing(app);
 app.details = createDetails(app);
 app.account = createAccount(app);
 app.users = createUsers(app);
+app.emby = createEmby(app);
 
 app.shell.init();
 window.addEventListener('jukuviewerchange', () => {
@@ -48,6 +50,7 @@ async function initialize() {
   }
 if (app.account.init()) return;
 app.users.init();
+app.emby.init();
 app.shell.access();
 window.JukuVIP.init(app.viewer?.sources?.includes('huangdou') !== false);
 window.JukuHistory.init({

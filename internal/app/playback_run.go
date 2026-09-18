@@ -45,9 +45,13 @@ func (app *UIApp) beginPlayback(parent context.Context, id string, index int, of
 	}
 	previousCancel := session.cancel
 	cache := session.prefetch
-	session.prefetch, session.native = nil, nil
+	session.prefetch, session.native, session.media = nil, nil, nil
 	remux, _ := parent.Value(playbackRemuxKey{}).(bool)
-	if cache != nil && (offset != 0 || cache.episode != index || cache.fromRun != session.run || cache.quality != quality || (cache.native != nil) != native || !native && cache.remux != remux) {
+	if cache != nil && (offset != 0 && !cache.planOnly || cache.episode != index || cache.fromRun != session.run || cache.quality != quality || (cache.native != nil) != native || !native && cache.remux != remux) {
+		cache.cancel()
+		cache = nil
+	}
+	if cache != nil && !cache.promote() {
 		cache.cancel()
 		cache = nil
 	}

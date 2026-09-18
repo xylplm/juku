@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export GOTOOLCHAIN=local
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+go env -w GOPROXY=https://goproxy.cn,direct
+go env -w GOSUMDB=off
 mkdir -p dist
 
 echo "Building macOS arm64..."

@@ -14,6 +14,7 @@ import (
 
 const playbackNativeSegmentSeconds = 2
 const playbackNativeBatchSegments = 12
+const playbackNativeForwardSegments = 24
 const playbackNativeCacheBytes = 96 * 1024 * 1024
 const playbackNativeSegmentBytes = 16 * 1024 * 1024
 
@@ -230,13 +231,11 @@ func (cache *playbackNative) render(job *playbackNativeJob) error {
 	cache.mu.Lock()
 	background := cache.background
 	cache.mu.Unlock()
-	if background {
-		for i := 0; i+1 < len(args); i++ {
-			if args[i] == "-threads" {
-				args[i+1] = "1"
-			}
-		}
+	release, err := cache.app.mediaResources().acquire(job.ctx, "video", background)
+	if err != nil {
+		return err
 	}
+	defer release()
 	command := ffmpegMediaCommand(job.ctx, cache.ffmpeg, args...)
 	log := &playbackLog{text: cappedStringWriter{limit: 64 * 1024}, ready: make(chan struct{})}
 	command.Stderr = log
@@ -380,13 +379,20 @@ func (cache *playbackNative) segment(ctx context.Context, index int) ([]byte, er
 
 func (cache *playbackNative) prefillLocked(index int) {
 	job := cache.job
-	if cache.background || job == nil || cache.err != nil || cache.closed || index < job.end-3 || job.end >= cache.segmentCountLocked() {
+	if cache.background || job == nil || cache.err != nil || cache.closed || job.end >= cache.segmentCountLocked() {
 		return
 	}
 	select {
 	case <-job.done:
-		if len(cache.segments[job.end]) == 0 {
-			cache.startJobLocked(job.end)
+		// Prepare the next batch while a useful amount is still playable.
+		// Limit both the forward window and its compressed bytes.
+		next, size := index, 0
+		for len(cache.segments[next]) > 0 {
+			size += len(cache.segments[next])
+			next++
+		}
+		if next < cache.segmentCountLocked() && next-index < playbackNativeForwardSegments && size < playbackNativeCacheBytes/2 {
+			cache.startJobLocked(next)
 		}
 	default:
 	}

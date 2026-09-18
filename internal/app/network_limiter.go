@@ -31,22 +31,31 @@ func (backoff *requestBackoff) Error() string {
 	return fmt.Sprintf("%s HTTP %d%s，已暂停该域名请求，%s 后可重试", backoff.host, backoff.status, reason, backoff.until.Format("15:04:05"))
 }
 
-func (d *Downloader) catalogResponseError(request *http.Request, response *http.Response, body []byte) error {
+func catalogResponseBlockReason(response *http.Response, body []byte) string {
 	if len(body) > 64*1024 {
 		body = body[:64*1024]
 	}
 	page := strings.ToLower(string(body))
 	reason := ""
 	if strings.Contains(page, "cloudflare") && (strings.Contains(page, "sorry, you have been blocked") || strings.Contains(page, "you are unable to access")) {
-		reason = "Cloudflare 已阻止当前网络访问"
-	} else if strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge") || strings.Contains(page, "cf-chl-") || strings.Contains(page, "just a moment") {
+		reason = "Cloudflare 拒绝了当前请求"
+	} else if strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge") || strings.Contains(page, "_cf_chl_opt") || strings.Contains(page, "<title>just a moment") && strings.Contains(page, "cloudflare") {
 		reason = "站点要求浏览器验证，当前请求无法通过"
 	}
+	return reason
+}
+
+func (d *Downloader) catalogResponseError(request *http.Request, response *http.Response, body []byte) error {
+	reason := catalogResponseBlockReason(response, body)
+	if d.limiter != nil && reason != "" && response.StatusCode >= 200 && response.StatusCode < 300 {
+		d.limiter.observeBlock(request, response)
+	}
+
 	host := strings.ToLower(request.URL.Hostname())
-	if d.limiter != nil && (response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests) {
+	if d.limiter != nil && (response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests || reason != "") {
 		d.limiter.mu.Lock()
 		backoffs := d.limiter.backoffs
-		if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode == http.StatusForbidden {
+		if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode != http.StatusTooManyRequests {
 			backoffs = d.limiter.backgroundBackoffs
 		}
 		if previous := backoffs[host]; previous != nil && previous.status == response.StatusCode {
@@ -188,9 +197,13 @@ func (limiter *requestLimiter) acquire(ctx context.Context, request *http.Reques
 }
 
 func (limiter *requestLimiter) observe(request *http.Request, response *http.Response) {
-	if response.StatusCode != http.StatusForbidden && response.StatusCode != http.StatusTooManyRequests {
+	if response.StatusCode != http.StatusForbidden && response.StatusCode != http.StatusTooManyRequests && !strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge") {
 		return
 	}
+	limiter.observeBlock(request, response)
+}
+
+func (limiter *requestLimiter) observeBlock(request *http.Request, response *http.Response) {
 	delay := time.Minute
 	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
 		delay = time.Duration(seconds) * time.Second
@@ -203,7 +216,7 @@ func (limiter *requestLimiter) observe(request *http.Request, response *http.Res
 	host := strings.ToLower(request.URL.Hostname())
 	limiter.mu.Lock()
 	backoffs := limiter.backoffs
-	if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode == http.StatusForbidden {
+	if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode != http.StatusTooManyRequests {
 
 		backoffs = limiter.backgroundBackoffs
 	}

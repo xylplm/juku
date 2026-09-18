@@ -25,7 +25,7 @@
   <div class="header-actions">
     <button id="refreshBtn" class="secondary"><span class="button-content"><span data-icon="refresh"></span><span id="refreshBtnLabel">更新剧库</span></span></button>
     <button id="openAccountBtn" class="quiet" aria-label="登录或注册账号" aria-haspopup="dialog" aria-controls="accountPanel"><span data-icon="user"></span><span id="accountLabel" class="account-label">登录</span></button>
-    <details id="headerMenu" class="action-menu header-menu"><summary id="moreButton" aria-label="更多" aria-expanded="false" aria-controls="morePanel"><span data-icon="more"></span></summary><div id="morePanel" class="action-popover menu-list"><button id="menuUsersBtn" data-page="users" data-admin-only hidden><span data-icon="user"></span>用户管理<span data-icon="right"></span></button><button id="openSettingsBtn"><span data-icon="settings"></span>代理 / 设置<span data-icon="right"></span></button><button id="menuHistoryBtn"><span data-icon="clock"></span>历史记录<span data-icon="right"></span></button><button id="sourceStatusBtn"><span data-icon="activity"></span>站源状态<span data-icon="right"></span></button><button id="aboutBtn"><span data-icon="help"></span>使用提示<span data-icon="right"></span></button><span id="libraryMenuUpdatedAt" class="small"></span></div></details>
+    <details id="headerMenu" class="action-menu header-menu"><summary id="moreButton" aria-label="更多" aria-expanded="false" aria-controls="morePanel"><span data-icon="more"></span></summary><div id="morePanel" class="action-popover menu-list"><button id="menuUsersBtn" data-page="users" data-admin-only hidden><span data-icon="user"></span>用户管理<span data-icon="right"></span></button><button id="openSettingsBtn"><span data-icon="settings"></span>代理 / 设置<span data-icon="right"></span></button><button id="openEmbyBtn" data-admin-only hidden aria-haspopup="dialog" aria-controls="embyPanel"><span data-icon="library"></span>Emby 同步<span data-icon="right"></span></button><button id="menuHistoryBtn"><span data-icon="clock"></span>历史记录<span data-icon="right"></span></button><button id="sourceStatusBtn"><span data-icon="activity"></span>站源状态<span data-icon="right"></span></button><button id="aboutBtn"><span data-icon="help"></span>使用提示<span data-icon="right"></span></button><span id="libraryMenuUpdatedAt" class="small"></span></div></details>
   </div>
 </header>
 <div id="viewerNotice" class="viewer-notice" role="status" hidden></div>
@@ -33,7 +33,7 @@
   <section class="page-view" id="libraryPage" data-view="library" aria-label="剧库">
     <div class="library-toolbar">
       <div class="library-search" id="librarySearch">
-        <div class="search-field"><span data-icon="search"></span><input id="searchInput" type="search" maxlength="80" autocomplete="off" placeholder="搜索剧名、简介或标签" aria-label="搜索剧库"><button id="clearSearchBtn" class="quiet icon-button" aria-label="清空搜索" hidden><span data-icon="close"></span></button></div>
+        <div class="search-combobox"><div class="search-field"><span data-icon="search"></span><input id="searchInput" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="searchSuggestionOptions" aria-expanded="false" maxlength="80" autocomplete="off" placeholder="搜索剧名、简介或标签" aria-label="搜索剧库"><button id="clearSearchBtn" class="quiet icon-button" aria-label="清空搜索" hidden><span data-icon="close"></span></button></div><div id="searchSuggestions" class="search-suggestions" hidden><div class="search-suggestions-heading">红果搜索建议</div><div id="searchSuggestionOptions" role="listbox" aria-label="红果搜索建议"></div></div></div>
         <button id="onlineSearchBtn" class="subtle">联网搜索</button>
       </div>
       <div id="recommendToolbar" class="recommend-toolbar" hidden><label class="catalog-select"><select id="recommendGenre" aria-label="红果推荐分类"><option value="short_play">真人剧</option><option value="comic_series">漫剧</option><option value="ai_series">AI 剧</option></select><span data-icon="chevron"></span></label><span class="small">分类推荐 · 无需登录</span><button id="recommendRefreshBtn" class="quiet button-content" title="从当前分类重新获取推荐，结果可能相同"><span data-icon="refresh"></span>重新获取</button></div>
@@ -46,7 +46,7 @@
       </div>
     </div>
     <div class="recent-searches" id="recentSearches" hidden aria-label="最近搜索"></div>
-    <div id="libraryFeedback" class="library-feedback" hidden><span id="libraryStatus" class="small" role="status" aria-live="polite"></span><button id="retryLibraryBtn" class="quiet" hidden>重试读取</button></div>
+    <div id="libraryFeedback" class="library-feedback" hidden><span id="libraryStatus" class="small" role="status" aria-live="polite"></span><button id="clearSearchCategoryBtn" class="quiet" hidden>取消分类筛选</button><button id="retryLibraryBtn" class="quiet" hidden>重试读取</button></div>
     <div class="catalog-layout" id="catalogLayout">
       <div class="catalog-content">
         <div class="section-heading catalog-heading"><div class="library-view-switch" role="group" aria-label="浏览内容"><button id="libraryModeBtn" class="quiet" aria-pressed="true">剧库</button><button id="recommendModeBtn" class="quiet" aria-pressed="false">红果推荐</button><span id="dramaCount" class="small" role="status"></span></div><section id="continueSection" class="continue-section" aria-labelledby="continueTitle" hidden>
@@ -147,7 +147,26 @@
         <label>用户名（可选）<input id="proxyUsername" type="text" autocomplete="off"></label>
         <label>密码（可选）<input id="proxyPassword" type="password" autocomplete="new-password"></label>
       </div>
+      <label class="playback-option"><input id="groupBySource" type="checkbox"><span>按站源分类保存下载和 Emby 内容</span></label>
+      <p class="small">默认关闭。开启后新剧存入黄果、黄豆、红果子目录；已有剧继续使用原目录，文件不会自动移动。</p>
       <div class="toolbar"><button id="saveSettingsBtn">保存并应用</button><button id="checkNetworkBtn" class="secondary">检测当前连接</button><span id="settingsStatus" class="small" aria-live="polite"></span></div>
+      <details class="playback-settings"><summary>播放与资源限制</summary>
+        <label class="playback-option"><input id="originalPlaybackEnabled" type="checkbox"><span>优先原始 MP4 / HLS 播放</span></label>
+        <p class="small">默认关闭，使用原有兼容播放链路；开启后兼容内容免转码，需要处理时优先保留视频。</p>
+        <div class="settings-grid">
+          <label>播放会话上限<input id="playback-maxSessions" type="number" min="1" max="64" value="4"></label>
+          <label>上游媒体连接上限<input id="playback-maxMediaRequests" type="number" min="1" max="64" value="8"></label>
+          <label>解密 / 换封装并发<input id="playback-maxRemuxJobs" type="number" min="0" max="8" value="2"></label>
+          <label>音频转码并发<input id="playback-maxAudioTranscodes" type="number" min="0" max="8" value="1"></label>
+          <label>视频转码并发<input id="playback-maxVideoTranscodes" type="number" min="0" max="8" value="1"></label>
+          <label>下一集预备并发<input id="playback-maxPrefetchJobs" type="number" min="0" max="4" value="1"></label>
+          <label>封装缓存（MB）<input id="playback-cacheMB" type="number" min="64" max="8192" value="512"></label>
+        </div>
+        <p class="small">Emby 探测或取流结束即释放会话名额。处理并发设为 0 可禁用该类任务；原始播放不占转码名额。</p>
+        <p>允许尝试客户端直连的站源</p><div id="playbackDirectSources" class="playback-direct-sources"></div>
+        <p id="playbackDirectHint" class="small">先开启“优先原始 MP4 / HLS 播放”，再选择直连站源。满足源站鉴权、编码、HTTPS 和跨域条件才会直连，失败退回中转。</p>
+        <div class="toolbar"><button id="savePlaybackSettings" class="secondary">保存播放设置</button><span id="playbackSettingsStatus" class="small" role="status"></span></div>
+      </details>
       <div class="small">保存后自动持久化。降低并发不终止正在下载的任务；代理变更用于后续连接，失败任务可重试。同一站源的剧库请求顺序执行，下载与剧库请求使用独立并发。</div>
     </div>
     </div><section class="viewer-settings" aria-labelledby="viewerSettingsTitle">
@@ -162,6 +181,29 @@
     <div class="statusbar" id="configText"></div>
     <div class="small notice" id="ffmpegSettingsStatus" role="status"></div>
   </dialog>
+<dialog id="embyPanel" class="emby-dialog" aria-labelledby="embyTitle">
+  <div class="dialog-heading"><h2 id="embyTitle">Emby 自动同步</h2><button class="quiet icon-button" data-close aria-label="关闭 Emby 同步"><span data-icon="close"></span></button></div>
+  <div class="dialog-body">
+    <p class="small">自动写入剧集和分集文件，后续补入新集数，无需先下载视频。请将输出目录加入 Emby 的电视剧媒体库。</p>
+    <form id="embyForm" class="emby-form">
+      <label class="account-check"><input id="embyEnabled" type="checkbox"><span>启用自动同步</span></label>
+      <div class="settings-grid">
+        <label class="wide">媒体库输出目录<input id="embyOutputDir" type="text" maxlength="2048" required placeholder="程序所在服务器的文件夹"></label>
+        <label class="wide">Emby 能访问的剧库地址<input id="embyBaseURL" type="url" maxlength="2048" placeholder="http://剧库服务器:8998"></label>
+        <label>检查间隔（分钟）<input id="embyInterval" type="number" min="5" max="1440" value="60" required></label>
+      </div>
+      <fieldset class="account-source-fieldset"><legend>自动加入的范围</legend><label class="account-check"><input id="embyFollowing" type="checkbox" checked><span>我的追剧<small>当前管理员的“在看”和“想看”，其他用户的记录独立保留。</small></span></label><label class="account-check"><input id="embyDownloads" type="checkbox" checked><span>下载完成的合集<small>已下载分集优先读取本地文件，其余分集可在线播放。</small></span></label></fieldset>
+      <p id="embyOwner" class="small"></p>
+      <p class="small">合并完成后会补入“特别篇”中的合并版。海报与 STRM、NFO 一起保存；按站源分类可在“剧库设置”中开启。</p>
+      <details class="emby-refresh-settings"><summary>通知 Emby 扫描（可选）</summary><div class="settings-grid"><label class="wide">Emby 服务器地址<input id="embyServerURL" type="url" maxlength="2048" placeholder="http://emby:8096" autocomplete="off"></label><label class="wide">Emby API Key<input id="embyAPIKey" type="password" maxlength="2048" autocomplete="new-password"></label></div><p class="small">填写后自动通知扫描，并检查 Emby 海报。已有自定义海报会保留；本程序生成的海报随资料更新。未填写时仍保存海报，可使用 Emby 的实时监控或定时扫描。更换 Emby 服务器后需重新填写 API Key。</p></details>
+      <div class="toolbar"><button id="embySaveBtn" type="submit">保存并应用</button><button id="embyRunBtn" class="secondary" type="button" disabled>立即同步</button></div>
+    </form>
+    <p id="embyFeedback" class="small" role="status" aria-live="polite"></p>
+    <div class="emby-status"><strong id="embySummary">尚未同步</strong><p id="embyPosterSummary" class="small"></p><p id="embySchedule" class="small"></p><p id="embyResult" class="small" role="status"></p></div>
+    <p id="embyEmpty" class="small">启用后会自动加入所选范围内的剧集。</p><ul id="embyEntries" class="emby-entries" aria-label="Emby 同步记录"></ul>
+    <p class="small">移出所有同步范围或关闭同步会停止后续更新，已导入的文件保留。手动导出 ZIP 的入口仍在剧集详情中。</p>
+  </div>
+</dialog>
 <dialog id="accountPanel" class="account-dialog" aria-labelledby="accountTitle">
   <div class="dialog-heading"><h2 id="accountTitle">我的账号</h2><button class="quiet icon-button" data-close aria-label="关闭账号"><span data-icon="close"></span></button></div>
   <div class="dialog-body">
@@ -213,7 +255,7 @@
           <button id="mobilePlayPauseBtn" class="mobile-play-toggle mobile-only" aria-label="播放"><span data-icon="play"></span></button>
           <div class="mobile-player-caption mobile-only">
             <span id="mobileEpisodeVIP" class="mobile-vip-label" hidden>VIP · 仅试看</span><h2 id="mobilePlayerTitle">正在加载</h2>
-            <div class="mobile-progress-heading"><span class="mobile-swipe-hint">上下滑动切换分集</span><span id="mobilePlaybackTime">0:00 / 0:00</span></div>
+            <div class="mobile-progress-heading"><span class="mobile-swipe-hint">上下滑动切换分集</span><span id="mobileBufferStatus"></span><span id="mobilePlaybackTime">0:00 / 0:00</span></div>
             <div class="mobile-progress-row">
               <button id="mobileTransportBtn" class="quiet icon-button landscape-only" aria-label="暂停"><span class="control-play"><span data-icon="play"></span></span><span class="control-pause"><span data-icon="pause"></span></span></button>
               <button id="mobileNextEpisodeBtn" class="quiet icon-button landscape-only" aria-label="下一集" disabled><span data-icon="next"></span></button>
@@ -232,7 +274,7 @@
           <button id="exitPlayerFullscreenBtn" class="secondary stage-fullscreen-exit" aria-label="退出播放器全屏">退出全屏</button>
         </div>
         <div class="player-toolbar"><button id="toggleEpisodesBtn" class="secondary" aria-expanded="false" aria-controls="playerEpisodesPanel">选集</button><button id="previousEpisodeBtn" class="secondary icon-button" aria-label="上一集" title="上一集" disabled><span data-icon="previous"></span></button><button id="nextEpisodeBtn" class="button-content" disabled>下一集<span data-icon="next"></span></button><label id="playbackQualityControl" hidden>画质<select id="playbackQuality" aria-label="播放清晰度"><option value="0">自动</option></select></label><label>倍速<select id="playbackRate" aria-label="播放倍速"><option value="0.75">0.75 倍</option><option value="1" selected>1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option><option value="3">3 倍</option></select></label><button id="playerFullscreenBtn" class="secondary icon-button" aria-label="全屏" title="全屏" hidden><span data-icon="fullscreen"></span></button><button id="playerPreferencesBtn" class="secondary icon-button" aria-label="播放设置" aria-expanded="false" aria-controls="playerPreferences"><span data-icon="settings"></span></button></div>
-        <div class="playback-feedback"><span id="playbackStatus" class="small" role="status" aria-live="polite"></span><span id="prefetchStatus" class="small" role="status" aria-live="polite" hidden></span></div>
+        <div class="playback-feedback"><span id="playbackStatus" class="small" role="status" aria-live="polite"></span><span id="playbackBufferStatus" class="small" hidden></span><span id="prefetchStatus" class="small" role="status" aria-live="polite" hidden></span></div>
         <div id="playbackHistoryStatus" class="small" role="status" aria-live="polite"></div><div class="playback-error-row"><div id="playbackError" class="error" role="alert"></div><button id="retryPlaybackBtn" class="secondary" disabled hidden>重试播放</button></div>
         <div id="playerPreferences" class="player-preferences" hidden>
           <div class="mobile-settings-heading mobile-only"><h3 id="mobilePreferencesTitle">更多</h3><button id="closePlayerPreferencesBtn" class="quiet icon-button" aria-label="关闭播放设置"><span data-icon="close"></span></button></div>
@@ -252,12 +294,15 @@
 <script src="/assets/navigation.js"></script>
 <script src="/assets/player-danmaku.js"></script>
 <script src="/assets/history.js"></script>
+<script src="/assets/player-buffer.js"></script>
 <script src="/assets/player-orientation.js"></script>
 <script src="/assets/player-mobile.js"></script>
 <script src="/assets/player-controls.js"></script>
+<script src="/assets/hls.min.js"></script>
+<script src="/assets/player-media.js"></script>
 <script src="/assets/player-capabilities.js"></script>
 <script src="/assets/player-session.js"></script>
-<script src="/assets/player.js?v=20260916-mobile"></script>
+<script src="/assets/player.js?v=20260918-buffer"></script>
 <script src="/assets/library-sort.js"></script>
 <script src="/assets/vip-filter.js"></script>
 <script src="/assets/rankings.js"></script>

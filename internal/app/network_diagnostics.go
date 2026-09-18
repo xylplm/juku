@@ -71,6 +71,21 @@ func (a *UIApp) networkCheckResults(ctx context.Context) []networkCheckResult {
 				}
 				target := targets[index]
 				probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if providerSourceForURL(target.endpoint) == sourceHuangguoVideo || target.name == "黄果 video 入口" {
+					body, err := a.downloader.fetchProviderText(probeCtx, target.endpoint, a.downloader.providerBaseURL(sourceHuangguoVideo)+"/")
+					result := networkCheckResult{Name: target.name, Error: a.redactError(err)}
+					if err == nil {
+						result.Status = http.StatusOK
+						count := len(parseHuangguoVideoCards(body, target.endpoint))
+						result.Detail = fmt.Sprintf("%s 浏览器指纹，解析到 %d 部剧", huangguoBrowserProfile, count)
+						if count == 0 {
+							result.Error = "响应没有可识别的剧集内容"
+						}
+					}
+					results[index] = result
+					cancel()
+					continue
+				}
 				status, err := a.checkNetworkResource(probeCtx, http.MethodGet, target.endpoint, imageReferer(target.endpoint), false)
 				cancel()
 				results[index] = networkCheckResult{Name: target.name, Status: status, Error: a.redactError(err)}
@@ -134,8 +149,7 @@ func (a *UIApp) checkHuangguoMedia(ctx context.Context, task *Task) networkCheck
 		if variant == "" {
 			break
 		}
-		media.URL = variant
-		media.Playlist, err = a.downloader.fetchProviderText(ctx, variant, media.Referer)
+		media.Playlist, media.URL, err = a.downloader.fetchProviderTextURL(ctx, variant, media.Referer)
 		if err != nil {
 			result.Error = "播放列表失败: " + a.redactError(err)
 			return result

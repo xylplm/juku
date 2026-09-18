@@ -26,6 +26,13 @@ func hasCollectionPlaybackMedia(task Task) bool {
 }
 
 func (app *UIApp) collectionPlaybackTasksLocked(selectedID string) (string, []Task, []string, int, error) {
+	if strings.HasPrefix(selectedID, mergedPlaybackPrefix) {
+		task, _, err := app.mergedPlaybackTaskLocked(selectedID)
+		if err != nil {
+			return "", nil, nil, 0, err
+		}
+		return task.DramaTitle, []Task{task}, []string{selectedID}, 1, nil
+	}
 	selected := app.tasks[selectedID]
 	if !isPlayableDownloadTask(selected) {
 		return "", nil, nil, 0, errors.New("此分集不存在或尚未完成章节解析，请更新合集后再播放")
@@ -89,6 +96,9 @@ func completedPlaybackPath(task *UITask) string {
 func (app *UIApp) playbackCollectionTask(id string) (Task, string, error) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
+	if strings.HasPrefix(id, mergedPlaybackPrefix) {
+		return app.mergedPlaybackTaskLocked(id)
+	}
 	task := app.tasks[id]
 	if !isPlayableDownloadTask(task) {
 		return Task{}, "", errors.New("分集任务已被清理或正在移除，请重新打开合集")
@@ -105,6 +115,12 @@ type collectionPlaybackPreparation struct {
 func (app *UIApp) prepareCollectionDownload(ctx context.Context, id string) (collectionPlaybackPreparation, error) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
+	if strings.HasPrefix(id, mergedPlaybackPrefix) {
+		if _, _, err := app.mergedPlaybackTaskLocked(id); err != nil {
+			return collectionPlaybackPreparation{}, err
+		}
+		return collectionPlaybackPreparation{Source: "merged", DownloadStatus: uiStatusSuccess}, ctx.Err()
+	}
 	task := app.tasks[id]
 	if !isPlayableDownloadTask(task) {
 		return collectionPlaybackPreparation{}, errors.New("分集任务已被清理或正在移除，请重新打开合集")

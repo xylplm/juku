@@ -16,6 +16,7 @@ type runtimeSettings struct {
 	RequestIntervalMS  int     `json:"requestIntervalMs"`
 	ProxyURL           *string `json:"proxyURL,omitempty"`
 	OutputDir          *string `json:"outputDir,omitempty"`
+	GroupBySource      *bool   `json:"groupBySource,omitempty"`
 }
 
 func (settings runtimeSettings) validate() error {
@@ -92,6 +93,9 @@ func applyRuntimeSettings(cfg *Config, settings runtimeSettings) {
 	if settings.OutputDir != nil {
 		cfg.OutputDir, _ = normalizedOutputDirectory(*settings.OutputDir)
 	}
+	if settings.GroupBySource != nil {
+		cfg.GroupBySource = *settings.GroupBySource
+	}
 }
 
 func (a *UIApp) updateRuntimeSettings(writer http.ResponseWriter, request *http.Request) bool {
@@ -118,6 +122,10 @@ func (a *UIApp) updateRuntimeSettings(writer http.ResponseWriter, request *http.
 		value := firstNonEmpty(a.nextOutputDir, cfg.outputDirSetting, cfg.OutputDir)
 		settings.OutputDir = &value
 	}
+	if settings.GroupBySource == nil {
+		value := cfg.GroupBySource
+		settings.GroupBySource = &value
+	}
 	a.mu.Unlock()
 	directory, err := normalizedOutputDirectory(*settings.OutputDir)
 	if err != nil {
@@ -142,6 +150,10 @@ func (a *UIApp) updateRuntimeSettings(writer http.ResponseWriter, request *http.
 	a.cfg.RequestConcurrency = settings.RequestConcurrency
 	a.cfg.RequestIntervalMS = settings.RequestIntervalMS
 	a.cfg.ProxyURL = *settings.ProxyURL
+	a.cfg.GroupBySource = *settings.GroupBySource
+	a.downloader.directoryMu.Lock()
+	a.downloader.downloadGrouping = settings.GroupBySource
+	a.downloader.directoryMu.Unlock()
 	a.nextOutputDir = directory
 	a.downloader.limiter.configure(settings.RequestConcurrency, time.Duration(settings.RequestIntervalMS)*time.Millisecond)
 	a.ensureWorkersLocked()
@@ -164,6 +176,9 @@ func saveRuntimeSettings(directory string, settings runtimeSettings) error {
 	document.Network.RequestIntervalMS = settings.RequestIntervalMS
 	if settings.OutputDir != nil {
 		document.Download.Directory = *settings.OutputDir
+	}
+	if settings.GroupBySource != nil {
+		document.Download.GroupBySource = *settings.GroupBySource
 	}
 	if settings.ProxyURL != nil {
 		document.Network.Proxy = *settings.ProxyURL

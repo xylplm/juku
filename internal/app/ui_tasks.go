@@ -45,7 +45,9 @@ func (a *UIApp) removeTaskLocked(id string) {
 	}
 	a.taskOrder = order
 	if task != nil && !groupRemains {
-		delete(a.merges, task.DramaID)
+		if _, _, err := a.mergedPlaybackTaskLocked(mergedPlaybackPrefix + task.DramaID); err != nil && a.mergeJobs[task.DramaID] == nil {
+			delete(a.merges, task.DramaID)
+		}
 	}
 }
 

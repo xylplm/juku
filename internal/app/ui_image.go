@@ -8,7 +8,6 @@ import (
 	"image/jpeg"
 	"io"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,13 +19,12 @@ func isHongguoImageHost(host string) bool {
 		strings.HasSuffix(host, ".byteimg.com") || strings.HasSuffix(host, ".fqnovelpic.com")
 }
 
-func validImageURL(remote *url.URL) bool {
-	return remote != nil && remote.Scheme == "https" && remote.Opaque == "" && remote.User == nil &&
-		(remote.Port() == "" || remote.Port() == "443") && allowedImageHost(remote.Hostname())
-}
-
 func (app *UIApp) loadCoverImage(ctx context.Context, remoteURL string, decode func([]byte, string) []byte) ([]byte, error) {
-	return app.coverImages.load(ctx, remoteURL, func(ctx context.Context) ([]byte, error) {
+	source, _ := ctx.Value(coverSourceKey{}).(string)
+	referer := sourceCoverReferer(source, remoteURL)
+	return app.coverImages.load(ctx, remoteURL+"\x00"+referer, func(ctx context.Context) ([]byte, error) {
+		ctx = context.WithValue(ctx, coverRequestKey{}, true)
+		ctx = context.WithValue(ctx, coverSourceKey{}, source)
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
 		if err != nil {
 			return nil, err
@@ -34,7 +32,7 @@ func (app *UIApp) loadCoverImage(ctx context.Context, remoteURL string, decode f
 		if !validImageURL(request.URL) {
 			return nil, errors.New("封面地址不受支持")
 		}
-		request.Header.Set("Referer", imageReferer(remoteURL))
+		request.Header.Set("Referer", referer)
 		request.Header.Set("User-Agent", userAgent)
 		request.Header.Set("Accept", "image/webp,image/jpeg,image/png,image/gif,*/*;q=0.5")
 		client := *app.downloader.client
@@ -42,7 +40,7 @@ func (app *UIApp) loadCoverImage(ctx context.Context, remoteURL string, decode f
 			if len(via) >= 5 || !validImageURL(request.URL) {
 				return errors.New("封面重定向地址不受支持")
 			}
-			request.Header.Set("Referer", imageReferer(request.URL.String()))
+			request.Header.Set("Referer", referer)
 			return nil
 		}
 		response, err := client.Do(request)

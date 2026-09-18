@@ -36,7 +36,7 @@ export function createDownloads(app) {
     label.appendChild(select);
     return label;
   }
-function buildGroups(){const byID=new Map();tasks.forEach(task=>{const id=task.dramaId||task.dramaTitle||task.id;let group=byID.get(id);if(!group){group={id,title:task.dramaTitle||'短剧',tasks:[],release:'unknown'};byID.set(id,group);}group.tasks.push(task);if(task.releaseStatus)group.release=task.releaseStatus;});return Array.from(byID.values());}
+function buildGroups(){const byID=new Map();tasks.forEach(task=>{const id=task.dramaId||task.dramaTitle||task.id;let group=byID.get(id);if(!group){group={id,title:task.dramaTitle||'短剧',tasks:[],release:'unknown'};byID.set(id,group);}group.tasks.push(task);if(task.releaseStatus)group.release=task.releaseStatus;});for(const [id,merge] of Object.entries(mergeStates)){if(merge.playbackTaskId&&!byID.has(id))byID.set(id,{id,title:merge.dramaTitle||'短剧',tasks:[],release:'unknown'});}return Array.from(byID.values());}
 
 function groupMatches(group){const keyword=$('taskSearch').value.trim().toLowerCase();if(keyword&&!group.title.toLowerCase().includes(keyword))return false;const release=$('releaseStatus').value;if(release&&group.release!==release)return false;const status=$('taskStatus').value;const stats=groupStats(group);if(status==='completed')return stats.success===group.tasks.length;if(status==='unfinished')return stats.success!==group.tasks.length;if(status==='failed')return stats.failed>0;if(status==='running')return stats.running+stats.parsing+stats.queued>0;if(status==='paused')return stats.paused>0;if(status==='canceled')return stats.canceled>0;return true;}
 
@@ -103,6 +103,8 @@ function renderTasks(next) {
 
 function renderGroup(group) {
   const stats = groupStats(group);
+  const merge = mergeStates[group.id];
+  if (!group.tasks.length && merge?.playbackTaskId) stats.percent = 100;
   const wrap = element('article', 'group' + (openGroups.has(group.id) ? ' open' : ''));
   wrap.dataset.dramaId = group.id;
   const head = element('div', 'group-head');
@@ -112,14 +114,15 @@ function renderGroup(group) {
   checkbox.setAttribute('aria-label', '选择合集 ' + group.title);
   checkbox.dataset.focusKey = 'group-select-' + group.id;
   const selectedCount = group.tasks.filter(task => selectedTasks.has(task.id)).length;
-  checkbox.checked = selectedCount === group.tasks.length;
+  checkbox.checked = group.tasks.length > 0 && selectedCount === group.tasks.length;
+  checkbox.disabled = !group.tasks.length;
   checkbox.indeterminate = selectedCount > 0 && !checkbox.checked;
   checkbox.addEventListener('change', () => selectGroup(group, checkbox.checked));
   const info = element('div');
   info.appendChild(element('h2', 'group-title', group.title));
-  const statuses = [releaseText(group.release), '共 ' + group.tasks.length + ' 集', '完成 ' + stats.success];
+  const statuses = group.tasks.length ? [releaseText(group.release), '共 ' + group.tasks.length + ' 集', '完成 ' + stats.success] : ['本地合并视频'];
   const qualities = [...new Set(group.tasks.map(task => number(task.downloadQuality)))];
-  statuses.push('画质：' + (qualities.length === 1 ? qualityLabel(qualities[0]) : '按分集设置'));
+  if (qualities.length) statuses.push('画质：' + (qualities.length === 1 ? qualityLabel(qualities[0]) : '按分集设置'));
   for (const [key, label] of [['running','下载中'],['queued','排队'],['parsing','解析中'],['paused','暂停'],['failed','失败'],['canceled','已取消']]) if (stats[key]) statuses.push(label + ' ' + stats[key]);
   const meta = element('p', 'small', statuses.join(' · '));
   meta.appendChild(element('span', 'group-watch-progress', historySuffix(group.id)));
@@ -128,8 +131,7 @@ function renderGroup(group) {
   selection.appendChild(checkbox);
   heading.append(selection, info);
   head.append(heading, progressBar(stats.percent), element('p', 'small', stats.percent + '% · 已写入 ' + formatBytes(stats.bytes) + (stats.speed > 0 ? ' · ' + formatBytes(stats.speed) + '/s' : '')));
-  const merge = mergeStates[group.id];
-  if (merge) head.appendChild(element('p', merge.error ? 'error notice' : 'small notice', '合并：' + ({running:'进行中', success:'完成', failed:'失败'}[merge.status] || merge.status) + ' ' + (merge.progress || 0) + '%' + (merge.detail ? ' · ' + merge.detail : '') + (merge.error ? ' · ' + merge.error : '')));
+  if (merge) head.appendChild(element('p', merge.error ? 'error notice' : 'small notice', '合并：' + ({queued:'排队中', running:'进行中', success:'完成', failed:'失败'}[merge.status] || merge.status) + ' ' + (merge.progress || 0) + '%' + (merge.detail ? ' · ' + merge.detail : '') + (merge.error ? ' · ' + merge.error : '')));
   const actions = element('div', 'group-actions');
   function action(label, key, callback, disabled = false, className = 'secondary') {
     const node = button(label, callback, disabled, className);
@@ -137,21 +139,24 @@ function renderGroup(group) {
     return node;
   }
   const playable = group.tasks.filter(task => task.playable).sort((left, right) => number(left.index) - number(right.index))[0];
-  actions.appendChild(action(watchLabel(group.id, '播放'), 'play', () => window.dramaPlayer.openCollection(playable.id, group.title, true), !playable, 'secondary collection-play-button'));
+  if (merge?.playbackTaskId) actions.appendChild(action('播放全集（' + merge.startEpisode + '–' + merge.endEpisode + '集）', 'play-merged', () => window.dramaPlayer.openCollection(merge.playbackTaskId, group.title, true), false, 'collection-play-button merged-play-button'));
+  if (group.tasks.length) actions.appendChild(action(merge?.playbackTaskId ? '分集播放' : watchLabel(group.id, '播放'), 'play', () => window.dramaPlayer.openCollection(playable.id, group.title, true), !playable, 'secondary collection-play-button'));
   const toggle = action(openGroups.has(group.id) ? '收起分集' : '查看分集', 'episodes', () => {
     if (openGroups.has(group.id)) openGroups.delete(group.id); else openGroups.add(group.id);
     renderTasks(tasks);
   });
   toggle.setAttribute('aria-expanded', String(openGroups.has(group.id)));
+  toggle.disabled = !group.tasks.length;
   actions.appendChild(toggle);
   if (stats.running + stats.queued + stats.parsing) actions.appendChild(action('暂停', 'pause', () => taskAction('pause', [], [group.id])));
   if (stats.paused) actions.appendChild(action('继续', 'resume', () => taskAction('resume', [], [group.id])));
   if (stats.failed + stats.canceled) actions.appendChild(action('重试失败', 'retry', () => taskAction('retry', [], [group.id])));
+  if (merge && ['queued', 'running'].includes(merge.status)) actions.appendChild(action('取消合并', 'cancel-merge', async () => {try {await post('/api/ui/merge/cancel', {dramaIds: [group.id]}); await pollTasks();} catch (error) {setMessage(error.message, true);}}));
   const menu = element('details', 'action-menu');
   const summary = element('summary', '', '更多操作');
   summary.dataset.focusKey = group.id + '-more';
   const popover = element('div', 'action-popover');
-  popover.append(action('更新本剧', 'update', () => updateGroups([group.id])), action('合并已完成分集', 'merge', () => mergeGroups([group.id]), !stats.success), action('取消本剧下载', 'cancel', () => taskAction('cancel', [], [group.id]), !stats.running && !stats.queued && !stats.parsing && !stats.paused));
+  popover.append(action('更新本剧', 'update', () => updateGroups([group.id])), action('合并已完成分集', 'merge', () => mergeGroups([group.id]), !stats.success || ['queued', 'running'].includes(merge?.status)), action('取消本剧下载', 'cancel', () => taskAction('cancel', [], [group.id]), !stats.running && !stats.queued && !stats.parsing && !stats.paused));
   menu.append(summary, popover);
   actions.appendChild(menu);
   head.appendChild(actions);
@@ -203,7 +208,16 @@ async function taskAction(action,ids,dramaIds=[]){const count=dramaIds.length||i
 
 async function clearTasks(){const ids=selectedTaskList().map(task=>task.id);if(!ids.length){setMessage('请先勾选需要清理的任务',true);return;}if(!confirm('清理勾选的 '+ids.length+' 个任务记录？进行中的任务会先停止；已下载视频不会删除。'))return;try{const result=await post('/api/ui/tasks/clear',{ids});ids.forEach(id=>selectedTasks.delete(id));renderTasks(result.data||[]);setMessage('已清理 '+(result.removed||0)+' 个任务'+(result.pending?'，另有 '+result.pending+' 个正在停止后清理':''));}catch(error){$('taskError').textContent='清理失败：'+error.message;}}
 
-async function mergeGroups(ids){if(!ids.length){setMessage('请先勾选下载合集',true);return;}const deleteEpisodes=$('deleteEpisodesAfterMerge').checked;if(deleteEpisodes&&!confirm('合并成功后删除 '+ids.length+' 个合集已合并的分集文件，确认继续？'))return;setMessage('正在合并 '+ids.length+' 部，下载区会显示进度');try{const result=await post('/api/ui/merge',{dramaIds:ids,deleteEpisodes});const items=result.data||[];const failed=items.filter(item=>!item.ok);setMessage('合并完成：成功 '+(items.length-failed.length)+'，失败 '+failed.length,failed.length>0);await pollTasks();}catch(error){$('taskError').textContent='合并失败：'+error.message;}}
+async function mergeGroups(ids) {
+  if (!ids.length) {setMessage('请先勾选下载合集', true); return;}
+  const deleteEpisodes = $('deleteEpisodesAfterMerge').checked;
+  if (deleteEpisodes && !confirm('合并成功后删除 ' + ids.length + ' 个合集已合并的分集文件，确认继续？')) return;
+  try {
+    const result = await post('/api/ui/merge', {dramaIds: ids, deleteEpisodes, async: true});
+    setMessage('已提交后台合并 ' + result.accepted + ' 部，可关闭或刷新页面，进度在下载区查看');
+    await pollTasks();
+  } catch (error) {$('taskError').textContent = '提交合并失败：' + error.message;}
+}
 
 
 function renderActivity(all) {
@@ -249,7 +263,7 @@ function toggleBatch() {
 
 function schedule(restart = true) {
   if (app.viewer?.onlineOnly) return;
-  const active = hasActiveTasks || ['idle', 'downloading', 'verifying'].includes(ffmpegStatus) || Object.values(mergeStates).some(state => state.status === 'running');
+  const active = hasActiveTasks || ['idle', 'downloading', 'verifying'].includes(ffmpegStatus) || Object.values(mergeStates).some(state => ['queued', 'running'].includes(state.status));
   const delay = document.hidden ? 30000 : active || !$('downloadsPage').hidden ? 2000 : 15000;
   if (!restart && polling && pollTimer && delay === scheduledDelay) return;
   clearTimeout(pollTimer);

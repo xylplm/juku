@@ -32,6 +32,7 @@ type Config struct {
 	ParamKey              string `json:"paramKey"`
 	ParamIV               string `json:"paramIV"`
 	OutputDir             string `json:"outputDir"`
+	GroupBySource         bool   `json:"groupBySource"`
 	FFmpeg                string `json:"ffmpeg"`
 	Concurrency           int    `json:"concurrency"`
 	RequestConcurrency    int    `json:"requestConcurrency"`

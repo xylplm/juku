@@ -19,19 +19,19 @@ func mustHost(raw string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
 }
 
-func (d *Downloader) fetchRaw(ctx context.Context, rawURL string) (string, error) {
+func (d *Downloader) fetchRaw(ctx context.Context, rawURL string) (string, string, error) {
 	var lastErr error
-	for attempt := 1; attempt <= d.cfg.Retries; attempt++ {
+	for attempt := 1; attempt <= max(1, d.cfg.Retries); attempt++ {
 		if attempt > 1 {
 			select {
 			case <-time.After(time.Duration(attempt) * time.Second):
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return "", "", ctx.Err()
 			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		req.Header.Set("Referer", "https://d2pypzndaqisk.cloudfront.net/")
 		req.Header.Set("Origin", "https://d2pypzndaqisk.cloudfront.net")
@@ -48,13 +48,17 @@ func (d *Downloader) fetchRaw(ctx context.Context, rawURL string) (string, error
 			continue
 		}
 		if len(body) > providerMaxBodyBytes {
-			return "", errors.New("播放列表响应过大")
+			return "", "", errors.New("播放列表响应过大")
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
 			continue
 		}
-		return string(body), nil
+		finalURL := rawURL
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalURL = resp.Request.URL.String()
+		}
+		return string(body), finalURL, nil
 	}
-	return "", lastErr
+	return "", "", lastErr
 }

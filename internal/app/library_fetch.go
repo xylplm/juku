@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -154,27 +152,9 @@ func (d *Downloader) buildDramaTasksInDirectory(ctx context.Context, drama Drama
 		return nil, nil
 	}
 	drama = d.hongguoCachedDrama(drama)
-	safeDrama := safeFilename(title)
-	dramaDir, err := safeJoin(d.cfg.OutputDir, safeDrama)
+	dramaDir, err := d.downloadDramaDirectory(drama, title, existingDirectory)
 	if err != nil {
 		return nil, err
-	}
-	if existingDirectory != "" {
-		dramaDir = existingDirectory
-	}
-	markerPath := filepath.Join(dramaDir, ".drama-id")
-	if b, readErr := os.ReadFile(markerPath); readErr == nil && strings.TrimSpace(string(b)) != "" && strings.TrimSpace(string(b)) != drama.ID {
-		dramaDir, err = safeJoin(d.cfg.OutputDir, safeFilename(fmt.Sprintf("%s_%s", title, hashShort(drama.ID))))
-		if err != nil {
-			return nil, err
-		}
-		markerPath = filepath.Join(dramaDir, ".drama-id")
-	}
-	if err := os.MkdirAll(dramaDir, 0o755); err != nil {
-		return nil, err
-	}
-	if drama.ID != "" {
-		_ = os.WriteFile(markerPath, []byte(drama.ID), 0o644)
 	}
 	var tasks []Task
 	for i, ch := range chapters {

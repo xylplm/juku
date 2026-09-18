@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export GOTOOLCHAIN=local
 cd "$(dirname "$0")/.."
+if command -v go >/dev/null 2>&1; then
+  go env -w GOPROXY=https://goproxy.cn,direct
+  go env -w GOSUMDB=off
+fi
 case "$(uname -m)" in
   arm64) binary="./dist/juku_darwin_arm64" ;;
   x86_64) binary="./dist/juku_darwin_amd64" ;;

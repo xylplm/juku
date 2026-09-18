@@ -53,6 +53,9 @@
       node('mobileDuration').textContent = time(total);
       progress.setAttribute('aria-valuetext', text);
       progress.style.setProperty('--played', (total ? position / total * 100 : 0) + '%');
+      const buffered = window.JukuPlaybackBuffer.snapshot(video, total);
+      progress.style.setProperty('--buffered-track', window.JukuPlaybackBuffer.gradient(buffered.ranges, total));
+      node('mobileBufferStatus').textContent = buffered.ahead >= 1 ? '缓存 ' + Math.floor(buffered.ahead) + ' 秒' : '';
     }
     function update() {
       const value = state();
@@ -63,8 +66,8 @@
       panel.classList.toggle('playback-loading', Boolean(value.loading));
       panel.classList.toggle('playback-buffering', waiting);
       if (lastTitle !== value.title) {node('mobilePlayerTitle').textContent = node('mobileHeadingTitle').textContent = value.title || '正在加载'; lastTitle = value.title;}
-      node('mobileEpisodeLabel').textContent = value.episode ? '第 ' + value.episode + ' 集' : '正在加载';
-      node('mobileEpisodeSummary').textContent = [value.releaseStatus === 'finished' ? '已完结' : value.releaseStatus === 'ongoing' ? '连载中' : '', value.total ? '全 ' + value.total + ' 集' : '获取分集中'].filter(Boolean).join(' · ');
+      node('mobileEpisodeLabel').textContent = value.episode ? (value.merged ? value.episode : '第 ' + value.episode + ' 集') : '正在加载';
+      node('mobileEpisodeSummary').textContent = [value.releaseStatus === 'finished' ? '已完结' : value.releaseStatus === 'ongoing' ? '连载中' : '', value.merged ? '本地合并视频' : value.total ? '全 ' + value.total + ' 集' : '获取分集中'].filter(Boolean).join(' · ');
       node('mobileEpisodeVIP').hidden = !value.vip;
       node('mobileRateBtn').textContent = node('mobileLandscapeRateBtn').textContent = video.playbackRate === 1 ? '倍速' : (video.playbackRate || 1) + ' 倍';
       const selectedQuality = quality.selectedOptions[0]?.textContent || '自动';
@@ -145,7 +148,7 @@
     panel.addEventListener('pointerdown', event => {if (event.target.closest('button,input,select')) reveal();});
     document.addEventListener('dialoglayerchange', () => {update(); reveal();});
     document.addEventListener('fullscreenchange', update);
-    for (const type of ['timeupdate', 'durationchange']) video.addEventListener(type, updateProgress);
+    for (const type of ['timeupdate', 'durationchange', 'progress']) video.addEventListener(type, updateProgress);
     for (const type of ['loadedmetadata', 'playing', 'pause', 'ended', 'ratechange', 'emptied', 'error']) video.addEventListener(type, update);
     rate.addEventListener('change', update);
     quality.addEventListener('change', update);
@@ -158,6 +161,6 @@
       else if (document.webkitFullscreenElement === panel) document.webkitExitFullscreen?.();
     });
     update();
-    return {update, active: () => mode.matches, rotation: () => orientation.rotation()};
+    return {update, updateProgress, active: () => mode.matches, rotation: () => orientation.rotation()};
   };
 })();

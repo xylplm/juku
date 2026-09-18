@@ -102,6 +102,7 @@ func TestEmbyRejectsInvalidURLAndSignature(t *testing.T) {
 
 func TestEmbyHLSRangePlaybackAndExpiry(t *testing.T) {
 	app, fixture := nativePlaybackFixture(t, "4", "320x180")
+	app.mediaResources().settings.Enabled = false
 	key, err := app.embySigningKey(true)
 	if err != nil {
 		t.Fatal(err)

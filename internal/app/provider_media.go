@@ -132,14 +132,14 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 		}
 	}
 	if chapter.PageURL != "" && (chapter.Source == sourceHuangguoAI || chapter.Source == sourceHuangguoVideo) {
-		body, err := d.fetchProviderText(ctx, chapter.PageURL, media.Referer)
+		body, pageURL, err := d.fetchProviderTextURL(ctx, chapter.PageURL, media.Referer)
 		if err != nil {
 			return providerMedia{}, err
 		}
 		if chapter.Source == sourceHuangguoAI {
-			media.URL = parseAIVideoURL(body, chapter.PageURL)
+			media.URL = parseAIVideoURL(body, pageURL)
 		} else {
-			media.URL = parseDataHLS(body, chapter.PageURL)
+			media.URL = parseDataHLS(body, pageURL)
 		}
 		d.providerMu.Lock()
 		if preferred := d.providerHosts[chapter.Source]; preferred != "" {
@@ -152,7 +152,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	parsed, _ := url.Parse(media.URL)
 	if strings.HasSuffix(strings.ToLower(parsed.Path), ".m3u8") {
-		playlist, err := d.fetchProviderText(ctx, media.URL, media.Referer)
+		playlist, finalURL, err := d.fetchProviderTextURL(ctx, media.URL, media.Referer)
 		if err != nil {
 			return providerMedia{}, fmt.Errorf("获取播放列表失败: %w", err)
 		}
@@ -162,7 +162,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 		if duration := m3u8Duration(playlist); duration > 0 {
 			media.Duration = duration
 		}
-		media.Playlist = playlist
+		media.Playlist, media.URL = playlist, finalURL
 	}
 	return media, nil
 }

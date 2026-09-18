@@ -41,7 +41,7 @@ func newSafeDNSDialer(transport *http.Transport) *safeDNSDialer {
 
 func protectedCDNHost(host string) bool {
 	host = strings.ToLower(host)
-	return strings.HasSuffix(host, ".zdmhyg.cn") || strings.HasSuffix(host, ".lkkwip.cn")
+	return isHuangguoImageCDNHost(host) || strings.HasSuffix(host, ".lkkwip.cn")
 }
 
 func (resolver *safeDNSDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {

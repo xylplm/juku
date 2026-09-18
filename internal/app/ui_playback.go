@@ -15,7 +15,6 @@ import (
 )
 
 const playbackIdleTimeout = 10 * time.Minute
-const playbackSessionLimit = 4
 const playbackMIME = `video/mp4; codecs="avc1.42C01F, mp4a.40.2"`
 
 type playbackSession struct {
@@ -37,6 +36,13 @@ type playbackSession struct {
 	prefetchVersion uint64
 	prefetch        *playbackPrefetch
 	native          *playbackNative
+	media           *playbackMediaSession
+	mediaReady      chan struct{}
+	mediaError      error
+	mediaWaiters    int
+	emby            bool
+	embyLegacy      bool
+	embyProcessing  string
 	quality         int
 	streamVersion   uint64
 	openedAt        time.Time
@@ -45,6 +51,7 @@ type playbackSession struct {
 }
 
 type playbackEpisode struct {
+	Merged    bool   `json:"merged,omitempty"`
 	VIP       bool   `json:"vip,omitempty"`
 	Index     int    `json:"index"`
 	Episode   string `json:"episode"`
@@ -57,14 +64,21 @@ type playbackEpisode struct {
 }
 
 type playbackView struct {
-	State    string                `json:"state"`
-	Error    string                `json:"error,omitempty"`
-	Run      uint64                `json:"run"`
-	Duration float64               `json:"duration"`
-	Prefetch *playbackPrefetchView `json:"prefetch,omitempty"`
+	State        string                `json:"state"`
+	Error        string                `json:"error,omitempty"`
+	Run          uint64                `json:"run"`
+	Duration     float64               `json:"duration"`
+	Prefetch     *playbackPrefetchView `json:"prefetch,omitempty"`
+	Plan         *playbackMediaPlan    `json:"plan,omitempty"`
+	MediaBytes   int64                 `json:"mediaBytes,omitempty"`
+	MediaFailure bool                  `json:"mediaFailure,omitempty"`
 }
 
 func (app *UIApp) registerPlaybackRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/api/ui/admin/playback", app.handlePlaybackSettings)
+	mux.HandleFunc("/api/ui/playback/plan", app.handlePlaybackPlan)
+	mux.HandleFunc("/api/ui/playback/media/", app.handlePlaybackMediaAsset)
+	mux.HandleFunc("/api/emby/media/", app.handleEmbyMediaAsset)
 	mux.HandleFunc("/api/ui/playback/open", app.handlePlaybackOpen)
 	mux.HandleFunc("/api/ui/playback/prepare", app.handlePlaybackPrepare)
 	mux.HandleFunc("/api/ui/playback/stream", app.handlePlaybackStream)
@@ -177,15 +191,22 @@ func (app *UIApp) handlePlaybackOpen(writer http.ResponseWriter, request *http.R
 	var collectionErr error
 	app.mu.Lock()
 	if input.FromHistory && previous.Mode == "collection" && downloadAllowed(request.Context()) {
-		candidate := app.tasks[previous.TaskID]
-		if isPlayableDownloadTask(candidate) && candidate.DramaID == previous.DramaID {
-			input.TaskID = candidate.ID
-		} else {
-			for _, taskID := range app.taskOrder {
-				candidate = app.tasks[taskID]
-				if isPlayableDownloadTask(candidate) && candidate.DramaID == previous.DramaID {
-					input.TaskID = candidate.ID
-					break
+		if strings.HasPrefix(previous.TaskID, mergedPlaybackPrefix) && previous.TaskID == mergedPlaybackPrefix+previous.DramaID {
+			if _, _, err := app.mergedPlaybackTaskLocked(previous.TaskID); err == nil {
+				input.TaskID = previous.TaskID
+			}
+		}
+		if input.TaskID == "" {
+			candidate := app.tasks[previous.TaskID]
+			if isPlayableDownloadTask(candidate) && candidate.DramaID == previous.DramaID {
+				input.TaskID = candidate.ID
+			} else {
+				for _, taskID := range app.taskOrder {
+					candidate = app.tasks[taskID]
+					if isPlayableDownloadTask(candidate) && candidate.DramaID == previous.DramaID {
+						input.TaskID = candidate.ID
+						break
+					}
 				}
 			}
 		}
@@ -233,10 +254,6 @@ func (app *UIApp) handlePlaybackOpen(writer http.ResponseWriter, request *http.R
 	if len(tasks) > 0 {
 		sessionDramaID = tasks[0].DramaID
 	}
-	if _, err := app.downloader.ensureFFmpeg(request.Context()); err != nil {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": app.redactError(err)})
-		return
-	}
 	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
 	defer cancel()
 	id := randomHex(24)
@@ -245,7 +262,7 @@ func (app *UIApp) handlePlaybackOpen(writer http.ResponseWriter, request *http.R
 		return
 	}
 	app.playbackMu.Lock()
-	if len(app.playbacks) >= playbackSessionLimit {
+	if app.activePlaybackSessionsLocked() >= app.mediaResources().snapshot().MaxSessions {
 		app.playbackMu.Unlock()
 		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "同时播放数量已达上限，请稍后再试"})
 		return
@@ -301,6 +318,10 @@ func (app *UIApp) handlePlaybackOpen(writer http.ResponseWriter, request *http.R
 		_, _, episode.Danmaku = hongguoPlaybackIDs(task)
 		if len(downloadIDs) > 0 {
 			episode.TaskID = downloadIDs[index]
+			episode.Merged = strings.HasPrefix(episode.TaskID, mergedPlaybackPrefix)
+			if episode.Merged {
+				episode.Danmaku = false
+			}
 		}
 		episodes = append(episodes, episode)
 	}
@@ -416,6 +437,12 @@ func (app *UIApp) playbackStatus(id string, touch bool) (playbackView, bool) {
 		if err != nil {
 			view.Error = app.redactError(err)
 		}
+	}
+	if session.media != nil {
+		plan := session.media.plan
+		view.Plan = &plan
+		view.MediaBytes = session.media.bytes.Load()
+		view.MediaFailure = session.media.failed.Load() || session.media.proxy != nil && session.media.proxy.Err() != nil
 	}
 	if session.prefetch != nil {
 		view.Prefetch = session.prefetch.view()

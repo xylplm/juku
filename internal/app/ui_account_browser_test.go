@@ -39,6 +39,7 @@ func TestAccountBrowserFixture(t *testing.T) {
 	}))
 	defer mediaServer.Close()
 	app := viewerTestApp(t)
+	t.Cleanup(app.embySyncer().stop)
 	app.loadedAt = time.Now()
 	app.tasks = map[string]*UITask{}
 	app.cond = sync.NewCond(&app.mu)

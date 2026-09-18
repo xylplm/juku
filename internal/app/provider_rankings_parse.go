@@ -47,8 +47,9 @@ func parseHongguoRanking(body string, board rankingBoard, page int) (rankingPage
 		if err != nil || json.Unmarshal(raw, &content) != nil {
 			return rankingPage{}, failure
 		}
+	} else if merged, found := parseHongguoMergeLoader(body, loaderKey); found {
+		content = merged
 	} else {
-
 		for _, tag := range rankingScriptTags.FindAllString(body, -1) {
 			if extractAttr(tag, "data-fn-name") != "r" || extractAttr(tag, "data-script-src") != "modern-run-router-data-fn" {
 				continue

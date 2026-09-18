@@ -36,8 +36,10 @@ func TestHuangguoCoverClickUsesScopedPageMetadata(t *testing.T) {
 	}{
 		{"image object", `"image":{"url":"/synthetic-cover?fixture=1"}`, "", "https://huangguoai.com/synthetic-cover?fixture=1", false},
 		{"thumbnail list", `"thumbnailUrl":["javascript:invalid","/synthetic-thumbnail"]`, "", "https://huangguoai.com/synthetic-thumbnail", false},
+		{"alternate CDN", `"image":"https://pic.tuafjz.cn/upload/synthetic.jpg?auth_key=fixture-0-0-test"`, "", "https://pic.tuafjz.cn/upload/synthetic.jpg?auth_key=fixture-0-0-test", false},
 		{"open graph", `"image":""`, `<meta content="/synthetic-og?x=1&amp;y=2" property="og:image">`, "https://huangguoai.com/synthetic-og?x=1&y=2", false},
-		{"unknown host", `"image":"https://example.invalid/cover"`, "", "", false},
+		{"new CDN", `"image":"https://new-covers.example.org/cover"`, "", "https://new-covers.example.org/cover", false},
+		{"reserved domain", `"image":"https://example.invalid/cover"`, "", "", false},
 		{"no cover", `"image":""`, "", "", false},
 		{"another drama", `"image":"/synthetic-cover"`, "", "", true},
 	} {

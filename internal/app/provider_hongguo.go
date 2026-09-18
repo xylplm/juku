@@ -250,7 +250,7 @@ func hongguoCoverAddress(values ...string) string {
 			continue
 		}
 		parsed, err := url.Parse(value)
-		if err == nil && validImageURL(parsed) && isHongguoImageHost(parsed.Hostname()) {
+		if err == nil && validImageURL(parsed) {
 			return value
 		}
 	}

@@ -2,8 +2,12 @@ name: juku
 services:
   app:
     image: ${JUKU_IMAGE:-juku:local}
+    pull_policy: build
     build:
       context: .
+      args:
+        GO_IMAGE: ${JUKU_GO_IMAGE:-golang:1.26-bookworm}
+        RUNTIME_IMAGE: ${JUKU_RUNTIME_IMAGE:-debian:bookworm-slim}
     ports:
       - "${JUKU_BIND_ADDRESS:-0.0.0.0}:${JUKU_PORT:-8998}:8998"
     environment:

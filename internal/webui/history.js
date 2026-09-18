@@ -23,6 +23,7 @@
   function progressText(id) {
     const entry = typeof id === 'object' ? id : get(id);
     if (!entry) return '';
+    if (entry.taskId?.startsWith('merged:')) return entry.completed ? '全集已看完' : '全集看到 ' + clock(entry.position);
     if (entry.completed) return entry.index >= entry.total ? '已看至最新' : '第' + entry.episode + '集已看完';
     return '看到第' + entry.episode + '集 ' + clock(entry.position);
   }

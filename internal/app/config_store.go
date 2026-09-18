@@ -18,9 +18,10 @@ type configDocument struct {
 }
 
 type downloadSettings struct {
-	Directory   string `json:"directory"`
-	Concurrency int    `json:"concurrency"`
-	FFmpeg      string `json:"ffmpeg,omitempty"`
+	Directory     string `json:"directory"`
+	GroupBySource bool   `json:"groupBySource,omitempty"`
+	Concurrency   int    `json:"concurrency"`
+	FFmpeg        string `json:"ffmpeg,omitempty"`
 }
 
 type networkSettings struct {
@@ -67,7 +68,7 @@ func documentFromConfig(cfg Config) configDocument {
 	defaults := defaultConfig()
 	document := configDocument{
 		Version:  1,
-		Download: downloadSettings{Directory: firstNonEmpty(cfg.outputDirSetting, cfg.OutputDir), Concurrency: cfg.Concurrency},
+		Download: downloadSettings{Directory: firstNonEmpty(cfg.outputDirSetting, cfg.OutputDir), GroupBySource: cfg.GroupBySource, Concurrency: cfg.Concurrency},
 		Network:  networkSettings{Proxy: firstNonEmpty(cfg.ProxyURL, "auto"), RequestConcurrency: cfg.RequestConcurrency, RequestIntervalMS: cfg.RequestIntervalMS},
 	}
 	if cfg.FFmpeg != "" && cfg.FFmpeg != defaults.FFmpeg {
@@ -122,6 +123,7 @@ func (document configDocument) config() (Config, error) {
 	}
 	cfg := defaultConfig()
 	cfg.OutputDir = document.Download.Directory
+	cfg.GroupBySource = document.Download.GroupBySource
 	cfg.Concurrency = document.Download.Concurrency
 	cfg.FFmpeg = firstNonEmpty(document.Download.FFmpeg, cfg.FFmpeg)
 	cfg.ProxyURL = document.Network.Proxy

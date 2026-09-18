@@ -175,5 +175,6 @@ func (app *UIApp) handleFollowingUpdate(writer http.ResponseWriter, request *htt
 		writeJSON(writer, status, map[string]string{"error": "追剧操作未保存：" + publicError(err).Error()})
 		return
 	}
+	app.notifyEmbySync()
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "entry": entry})
 }

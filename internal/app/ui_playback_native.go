@@ -42,10 +42,6 @@ func (app *UIApp) handlePlaybackNativeOpen(writer http.ResponseWriter, request *
 	prefetched := cache != nil
 	if cache == nil {
 		cache = newPlaybackNative(app, run.ctx, run.task, run.downloadID, input.Quality, input.Start, false)
-	} else {
-		cache.mu.Lock()
-		cache.background = false
-		cache.mu.Unlock()
 	}
 	stop := func() { run.stop(); cache.Close() }
 	app.playbackMu.Lock()

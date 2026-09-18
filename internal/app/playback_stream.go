@@ -90,14 +90,14 @@ func (downloader *Downloader) resolvePlaybackMedia(ctx context.Context, task Tas
 		return providerMedia{}, nil, err
 	}
 	mediaURL := fmt.Sprintf("%s/api/app/vid/h5/m3u8/%s?token=%s&c=%s", base, strings.TrimLeft(task.Chapter.VideoURL, "/"), url.QueryEscape(access.Token), url.QueryEscape(downloader.cfg.CDNURL))
-	playlist, err := downloader.fetchRaw(ctx, mediaURL)
+	playlist, finalURL, err := downloader.fetchRaw(ctx, mediaURL)
 	if err != nil {
 		return providerMedia{}, nil, err
 	}
 	if !strings.HasPrefix(strings.TrimSpace(playlist), "#EXTM3U") {
 		return providerMedia{}, nil, errors.New("站点未返回有效的播放列表")
 	}
-	return providerMedia{URL: mediaURL, Playlist: playlist, Duration: m3u8Duration(playlist), Referer: legacyFrontendURL + "/"}, key, nil
+	return providerMedia{URL: finalURL, Playlist: playlist, Duration: m3u8Duration(playlist), Referer: legacyFrontendURL + "/"}, key, nil
 }
 
 func playbackInputArgs(media providerMedia, input string, offset float64) []string {
@@ -165,6 +165,12 @@ func (app *UIApp) preparePlaybackMedia(ctx context.Context, task Task, downloadI
 		if err != nil {
 			return providerMedia{}, "", nil, err
 		}
+		proxy.acquire = func(request context.Context) (func(), error) {
+			if priority := ctx.Value(playbackPrefetchKey{}); priority != nil {
+				request = context.WithValue(request, playbackPrefetchKey{}, priority)
+			}
+			return app.mediaResources().acquire(request, "media", backgroundPlayback(ctx))
+		}
 		input = proxy.root
 	}
 	return media, input, proxy, nil
@@ -199,14 +205,13 @@ func (app *UIApp) streamPlayback(ctx context.Context, cancel context.CancelFunc,
 		if remux {
 			args = playbackRemuxArgs(media, input)
 		}
-		if optional, _ := ctx.Value(playbackPrefetchKey{}).(bool); optional {
-			for index := 0; index+1 < len(args); index++ {
-				if args[index] == "-threads" {
-					args[index+1] = "1"
-				}
-			}
+		// A prefetched process continues after the episode becomes current.
+		// Keep the normal bounded thread count so it can sustain foreground playback.
+		kind := "video"
+		if remux {
+			kind = "remux"
 		}
-		process, err = startPlaybackProcess(ctx, ffmpeg, args)
+		process, err = app.startBudgetedPlaybackProcess(ctx, ffmpeg, args, kind)
 		if err != nil {
 			return err
 		}

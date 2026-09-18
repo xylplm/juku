@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,9 +18,10 @@ import (
 )
 
 type hlsAsset struct {
-	remote   string
-	body     []byte
-	playlist bool
+	extension string
+	remote    string
+	body      []byte
+	playlist  bool
 }
 
 type hlsProxy struct {
@@ -37,6 +39,8 @@ type hlsProxy struct {
 	retries    int
 	host       string
 	diagnostic func(diagnosticEvent)
+	query      string
+	acquire    func(context.Context) (func(), error)
 }
 
 var hlsURIAttribute = regexp.MustCompile(`URI="([^"]+)"`)
@@ -64,7 +68,7 @@ func (d *Downloader) newHLSProxy(ctx context.Context, media providerMedia, key [
 	if remote, err := url.Parse(media.URL); err == nil {
 		proxy.host = remote.Hostname()
 	}
-	proxy.root = proxy.addAsset(hlsAsset{remote: media.URL, body: []byte(media.Playlist), playlist: media.Playlist != ""})
+	proxy.root = proxy.addAsset(playbackRootAsset(media))
 	proxy.server = &http.Server{
 		Handler:           proxy,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -78,7 +82,19 @@ func (d *Downloader) newHLSProxy(ctx context.Context, media providerMedia, key [
 	return proxy, nil
 }
 
-func (proxy *hlsProxy) Close() { _ = proxy.server.Close() }
+func playbackRootAsset(media providerMedia) hlsAsset {
+	asset := hlsAsset{remote: media.URL, body: []byte(media.Playlist), playlist: media.Playlist != ""}
+	if asset.playlist && !strings.Contains(media.Playlist, "#EXT-X-ENDLIST") && !strings.Contains(media.Playlist, "#EXT-X-STREAM-INF:") {
+		asset.body = nil
+	}
+	return asset
+}
+
+func (proxy *hlsProxy) Close() {
+	if proxy.server != nil {
+		_ = proxy.server.Close()
+	}
+}
 
 func (proxy *hlsProxy) Err() error {
 	proxy.mu.Lock()
@@ -107,13 +123,33 @@ func (proxy *hlsProxy) addAsset(asset hlsAsset) string {
 	if existing := proxy.assetIDs[asset.remote]; existing != "" {
 		return existing
 	}
-	extension := ".ts"
+	if len(proxy.assets) >= 16384 {
+		return ""
+	}
+	extension := asset.extension
+	if extension == "" {
+		remote, _ := url.Parse(asset.remote)
+		if remote != nil {
+			extension = strings.ToLower(path.Ext(remote.Path))
+		}
+		switch extension {
+		case ".m3u8":
+			asset.playlist = true
+		case ".mp4", ".m4s", ".m4a", ".aac", ".mp3", ".vtt", ".key", ".ts":
+		default:
+			extension = ".ts"
+		}
+	}
 	if asset.playlist {
 		extension = ".m3u8"
 	} else if len(asset.body) > 0 {
 		extension = ".key"
 	}
+	asset.extension = extension
 	local := proxy.base + strconv.Itoa(len(proxy.assets)+1) + extension
+	if proxy.query != "" {
+		local += "?" + proxy.query
+	}
 	parsed, _ := url.Parse(local)
 	proxy.assets[parsed.Path] = asset
 	proxy.assetIDs[asset.remote] = local
@@ -125,7 +161,7 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rewrite := func(reference string, playlist, key bool) (string, error) {
+	rewrite := func(reference string, playlist, key, initialization bool) (string, error) {
 		parsed, err := url.Parse(reference)
 		if err != nil {
 			return "", err
@@ -135,6 +171,11 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 			return "", errors.New("HLS 包含非 HTTP/HTTPS 资源地址")
 		}
 		asset := hlsAsset{remote: remote, playlist: playlist || strings.HasSuffix(strings.ToLower(parsed.Path), ".m3u8")}
+		if key {
+			asset.extension = ".key"
+		} else if initialization {
+			asset.extension = ".mp4"
+		}
 		resolved, _ := url.Parse(remote)
 		if key && len(proxy.key) > 0 && strings.Contains(parsed.Path, "/api/app/vid/sec") {
 			asset.body = proxy.key
@@ -142,7 +183,11 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 		if key && len(proxy.mediaKey) == 16 && strings.HasSuffix(resolved.Path, "/enc.key") {
 			asset.body = proxy.mediaKey
 		}
-		return proxy.addAsset(asset), nil
+		local := proxy.addAsset(asset)
+		if local == "" {
+			return "", errors.New("HLS 资源数量超过限制")
+		}
+		return local, nil
 	}
 	lines := strings.Split(strings.TrimPrefix(raw, "\ufeff"), "\n")
 	nextPlaylist := false
@@ -155,7 +200,7 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 			var rewriteErr error
 			lines[index] = hlsURIAttribute.ReplaceAllStringFunc(line, func(attribute string) string {
 				reference := hlsURIAttribute.FindStringSubmatch(attribute)[1]
-				local, err := rewrite(reference, strings.HasPrefix(trimmed, "#EXT-X-MEDIA:") || strings.HasPrefix(trimmed, "#EXT-X-I-FRAME-STREAM-INF:"), strings.HasPrefix(trimmed, "#EXT-X-KEY:"))
+				local, err := rewrite(reference, strings.HasPrefix(trimmed, "#EXT-X-MEDIA:") || strings.HasPrefix(trimmed, "#EXT-X-I-FRAME-STREAM-INF:"), strings.HasPrefix(trimmed, "#EXT-X-KEY:") || strings.HasPrefix(trimmed, "#EXT-X-SESSION-KEY:"), strings.HasPrefix(trimmed, "#EXT-X-MAP:"))
 				if err != nil {
 					rewriteErr = err
 					return attribute
@@ -166,7 +211,7 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 				return "", rewriteErr
 			}
 		} else if trimmed != "" {
-			lines[index], err = rewrite(trimmed, nextPlaylist, false)
+			lines[index], err = rewrite(trimmed, nextPlaylist, false, false)
 			if err != nil {
 				return "", err
 			}
@@ -174,6 +219,26 @@ func (proxy *hlsProxy) rewritePlaylist(raw, baseURL string) (string, error) {
 		}
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func hlsAssetContentType(extension string) string {
+	switch extension {
+	case ".mp4", ".m4s":
+		return "video/mp4"
+	case ".ts":
+		return "video/mp2t"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".vtt":
+		return "text/vtt"
+	case ".key":
+		return "application/octet-stream"
+	}
+	return ""
 }
 
 func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -190,6 +255,14 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	}
 	body := asset.body
 	if len(body) == 0 {
+		if proxy.acquire != nil {
+			release, err := proxy.acquire(request.Context())
+			if err != nil {
+				http.Error(writer, "媒体连接正在等待资源，请稍后重试", http.StatusServiceUnavailable)
+				return
+			}
+			defer release()
+		}
 		method := request.Method
 		if asset.playlist {
 			method = http.MethodGet
@@ -206,7 +279,7 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 			upstream.Header.Set("Origin", origin.Scheme+"://"+origin.Host)
 		}
 		for _, header := range []string{"Range", "If-Range"} {
-			if value := request.Header.Get(header); value != "" {
+			if value := request.Header.Get(header); value != "" && !asset.playlist {
 				upstream.Header.Set(header, value)
 			}
 		}
@@ -217,6 +290,16 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			_ = response.Body.Close()
+			if response.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+				writer.Header().Set("Content-Range", response.Header.Get("Content-Range"))
+				writer.WriteHeader(response.StatusCode)
+				return
+			}
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
+				proxy.recordError(fmt.Errorf("媒体源 HTTP %d", response.StatusCode))
+				writer.WriteHeader(response.StatusCode)
+				return
+			}
 			proxy.fail(writer, request, fmt.Errorf("HLS 资源请求失败: %s HTTP %d", upstream.URL.Hostname(), response.StatusCode))
 			return
 		}
@@ -228,7 +311,7 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 				return
 			}
 			asset.playlist = true
-			if response.Request != nil {
+			if response.Request != nil && response.Request.URL != nil {
 				asset.remote = response.Request.URL.String()
 			}
 		} else {
@@ -238,6 +321,9 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 				if value := response.Header.Get(header); value != "" {
 					writer.Header().Set(header, value)
 				}
+			}
+			if contentType := hlsAssetContentType(asset.extension); contentType != "" {
+				writer.Header().Set("Content-Type", contentType)
 			}
 			writer.WriteHeader(response.StatusCode)
 			if request.Method == http.MethodHead {
@@ -264,10 +350,7 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	} else {
 		writer.Header().Set("Content-Type", "application/octet-stream")
 	}
-	writer.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	if request.Method != http.MethodHead {
-		_, _ = writer.Write(body)
-	}
+	http.ServeContent(writer, request, "media", time.Time{}, bytes.NewReader(body))
 }
 
 func (proxy *hlsProxy) fetch(request *http.Request) (*http.Response, error) {

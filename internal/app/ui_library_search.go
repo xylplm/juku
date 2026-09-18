@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+func (app *UIApp) handleLibrarySearchSuggestions(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !requireSource(writer, request.Context(), sourceHongguo) {
+		return
+	}
+	query, err := hongguoSearchKeyword(request.URL.Query().Get("q"))
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	items, err := app.downloader.hongguoSearchSuggestions(request.Context(), query)
+	if request.Context().Err() != nil {
+		return
+	}
+	if err != nil {
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": "搜索联想暂不可用，仍可按回车搜索"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"query": query, "source": sourceHongguo, "data": items})
+}
+
 func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -73,5 +97,8 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 	app.mu.Lock()
 	saved := app.librarySaved && !app.libraryDirty
 	app.mu.Unlock()
-	writeJSON(writer, http.StatusOK, map[string]any{"query": keyword, "data": dramas, "total": result.Total, "saved": saved})
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"query": keyword, "source": sourceHongguo, "data": dramas, "total": result.Total,
+		"limited": result.Limited, "warning": result.Warning, "saved": saved,
+	})
 }

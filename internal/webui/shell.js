@@ -3,7 +3,9 @@ import { $, element, button, sourceLabel, normalizeSource, readPreference, saveP
 export function createShell(app) {
   const main = $('workspaceMain');
   const positions = {library: 0, following: 0, downloads: 0, users: 0};
-  let current = '', sourceStates = {};
+  let current = '', sourceStates = {}, sourceLoading = false, sourceRequest = '';
+  let sourceNotice;
+  const sourceRows = new Map(), sourceErrors = new Map();
 
   function setPage(page) {
     if (!app.viewer && page === 'users') return;
@@ -38,6 +40,8 @@ export function createShell(app) {
   }
 
   function info(title, build) {
+    sourceRows.clear();
+    sourceNotice = null;
     $('infoTitle').textContent = title;
     $('infoContent').replaceChildren();
     if (typeof build === 'function') build($('infoContent'));
@@ -45,26 +49,70 @@ export function createShell(app) {
     window.JukuDialogs.open('infoPanel');
   }
 
+  function updateSourceRows() {
+    const statuses = {loading: '正在获取', ready: '已就绪', success: '已更新', done: '已更新', failed: '暂不可用', error: '暂不可用', partial: '部分更新', cached: '使用缓存', pending: '等待更新'};
+    for (const [id, controls] of sourceRows) {
+      const state = sourceStates[id];
+      const allowed = !app.viewer?.sources || app.viewer.sources.includes(normalizeSource(id));
+      const busy = sourceRequest === id || sourceLoading && state?.status === 'loading';
+      controls.row.hidden = !allowed;
+      controls.status.textContent = sourceRequest === id ? '正在提交' : state ? statuses[state.status] || (state.error ? '暂不可用' : '已有缓存') : '未检查';
+      const date = state?.updatedAt && !state.updatedAt.startsWith('0001') ? new Date(state.updatedAt).toLocaleString() : '';
+      controls.detail.textContent = [Number.isFinite(state?.count) ? state.count + ' 部' : '', date].filter(Boolean).join(' · ');
+      controls.error.textContent = sourceErrors.get(id) || state?.error || '';
+      controls.action.disabled = !allowed || sourceLoading || Boolean(sourceRequest);
+      controls.action.textContent = busy ? '更新中…' : '更新';
+      controls.action.setAttribute('aria-busy', String(busy));
+      controls.action.title = sourceLoading || sourceRequest ? '正在更新剧库，完成后可再次更新' : '只更新' + controls.label + '的目录和资料';
+    }
+    if (sourceNotice) sourceNotice.textContent = sourceLoading || sourceRequest ? '正在更新剧库，已有内容可继续使用；完成后可单独更新站源。' : '点击对应站源的“更新”可查新、续载和补齐资料，失败时保留已有内容。';
+  }
+
+  async function updateSource(id) {
+    if (sourceLoading || sourceRequest || app.viewer?.sources && !app.viewer.sources.includes(normalizeSource(id))) return;
+    sourceRequest = id;
+    sourceErrors.delete(id);
+    updateSourceRows();
+    try {
+      const result = await app.api('/api/ui/dramas?update=1&source=' + encodeURIComponent(id));
+      sourceStates = result.sources || {};
+      sourceLoading = Boolean(result.loading);
+      if (result.updateAccepted === false) sourceErrors.set(id, '本次未提交：已有更新任务，可在完成后重试。');
+    } catch (error) {
+      sourceErrors.set(id, '更新请求失败：' + error.message);
+    } finally {
+      sourceRequest = '';
+      updateSourceRows();
+      void app.library.refresh();
+    }
+  }
+
   function showSources() {
     const names = {cloudfront: '黄果旧 API', huangguoai: '黄果网页', 'huangguo-video': '黄果备用网页', huangdou: '黄豆', hongguo: '红果'};
-    const statuses = {loading: '正在获取', ready: '已就绪', success: '已更新', done: '已更新', failed: '暂不可用', error: '暂不可用', cached: '使用缓存', pending: '等待更新'};
     info('站源状态', content => {
       for (const [id, label] of Object.entries(names)) {
         if (app.viewer?.sources && !app.viewer.sources.includes(normalizeSource(id))) continue;
-        const state = sourceStates[id];
         const row = element('section', 'source-status-row');
-        const heading = element('div', 'heading');
-        heading.append(element('h3', '', label), element('span', 'tag', state ? statuses[state.status] || (state.error ? '暂不可用' : '已有缓存') : '未检查'));
-        row.appendChild(heading);
-        if (state) {
-          const date = state.updatedAt && !state.updatedAt.startsWith('0001') ? new Date(state.updatedAt).toLocaleString() : '';
-          row.appendChild(element('p', 'small', [Number.isFinite(state.count) ? state.count + ' 部' : '', date].filter(Boolean).join(' · ')));
-          if (state.error) row.appendChild(element('p', 'error', state.error));
-        }
+        row.dataset.source = id;
+        const heading = element('div', 'heading source-status-heading');
+        const actions = element('div', 'source-status-actions');
+        const status = element('span', 'tag');
+        status.setAttribute('aria-live', 'polite');
+        const action = button('更新', () => updateSource(id), false, 'secondary source-update');
+        action.setAttribute('aria-label', '更新' + label);
+        actions.append(status, action);
+        heading.append(element('h3', '', label), actions);
+        const detail = element('p', 'small'), error = element('p', 'error');
+        error.setAttribute('role', 'status');
+        row.append(heading, detail, error);
+        sourceRows.set(id, {row, label, status, action, detail, error});
         content.appendChild(row);
       }
-      content.appendChild(element('p', 'small notice', '这里显示最近一次剧库请求的状态。点击“更新剧库”可重试，其他站源仍可独立使用。'));
+      sourceNotice = element('p', 'small notice');
+      content.appendChild(sourceNotice);
+      updateSourceRows();
     });
+    void app.library.refresh();
   }
 
   function positionMenu(menu) {
@@ -87,6 +135,7 @@ export function createShell(app) {
   }
 
   function access() {
+    updateSourceRows();
     document.body.classList.toggle('online-only', Boolean(app.viewer?.onlineOnly));
     document.querySelectorAll('[data-admin-only]').forEach(control => {control.hidden = !app.viewer?.account?.admin;});
     document.querySelectorAll('button[data-page=downloads], [data-go=downloads]').forEach(control => {control.hidden = Boolean(app.viewer?.onlineOnly);});
@@ -144,5 +193,5 @@ export function createShell(app) {
     setPage(window.JukuDialogs.page());
   }
 
-  return {init, access, info, page: () => current, resetScroll: () => {main.scrollTop = 0;}, sourceStates: value => {sourceStates = value || {};}};
+  return {init, access, info, page: () => current, resetScroll: () => {main.scrollTop = 0;}, sourceStates: (value, loading) => {sourceStates = value || {}; sourceLoading = Boolean(loading); updateSourceRows();}};
 }

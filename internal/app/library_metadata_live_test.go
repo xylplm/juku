@@ -20,7 +20,7 @@ func TestLiveHistoricalSortMetadata(t *testing.T) {
 	transport := d.client.Transport
 	d.client.Transport = rankingTransport(func(request *http.Request) (*http.Response, error) {
 		path := request.URL.Path
-		if !(strings.HasPrefix(path, "/search/") || path == "/detail" || strings.HasPrefix(path, "/detail/") || path == "/novel/player/video_detail/v1/" || path == "/api/drama/detail" || path == "/api/drama/list") {
+		if !(strings.HasPrefix(path, "/search/") || path == "/incent_resource/suggestion" || path == "/detail" || strings.HasPrefix(path, "/detail/") || path == "/novel/player/video_detail/v1/" || path == "/api/drama/detail" || path == "/api/drama/list") {
 			t.Errorf("metadata verification refused a non-metadata path: %s", path)
 			return rankingHTTPResponse(request, 403, "blocked by test"), nil
 		}

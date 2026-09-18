@@ -24,7 +24,7 @@ func TestEmbeddedInterfaceServesModulesWithoutExternalBuild(t *testing.T) {
 	if !strings.Contains(page.Body.String(), `<title>短剧库</title>`) || !strings.Contains(page.Header().Get("Content-Type"), "text/html") {
 		t.Fatal("new embedded page was not served")
 	}
-	references := regexp.MustCompile(`(?:src|href)="(/assets/[a-z-]+\.(?:js|css))(?:\?v=[a-z0-9-]+)?"`)
+	references := regexp.MustCompile(`(?:src|href)="(/assets/[a-z0-9.-]+\.(?:js|css))(?:\?v=[a-z0-9-]+)?"`)
 	imports := regexp.MustCompile(`from '\./([a-z-]+\.js)'`)
 	seen := map[string]bool{}
 	var inspect func(string)
@@ -51,7 +51,7 @@ func TestEmbeddedInterfaceServesModulesWithoutExternalBuild(t *testing.T) {
 	for _, reference := range references.FindAllStringSubmatch(page.Body.String(), -1) {
 		inspect(reference[1])
 	}
-	for _, path := range []string{"/assets/main.js", "/assets/following.js", "/assets/library.js", "/assets/card-viewport.js", "/assets/cover-repair.js", "/assets/downloads.js", "/assets/navigation.js", "/assets/player.js", "/assets/app.css"} {
+	for _, path := range []string{"/assets/main.js", "/assets/following.js", "/assets/library.js", "/assets/card-viewport.js", "/assets/cover-repair.js", "/assets/downloads.js", "/assets/navigation.js", "/assets/player.js", "/assets/player-media.js", "/assets/hls.min.js", "/assets/playback-settings.js", "/assets/app.css"} {
 		if !seen[path] {
 			t.Error("module was not reachable from the embedded page", path)
 		}

@@ -15,7 +15,7 @@ func TestHuangguoVideoStopsOnCloudflareBlock(t *testing.T) {
 		return rankingHTTPResponse(request, 403, "Cloudflare: Sorry, you have been blocked"), nil
 	})
 	items, err := d.fetchHuangguoVideoDramas(context.Background())
-	if len(items) != 0 || err == nil || !strings.Contains(err.Error(), "Cloudflare 已阻止当前网络访问") || calls.Load() != 1 {
+	if len(items) != 0 || err == nil || !strings.Contains(err.Error(), "Cloudflare 拒绝了当前请求") || calls.Load() != 1 {
 		t.Fatal("blocked catalog lost its cause or repeated requests", err)
 	}
 }
@@ -36,5 +36,26 @@ func TestHuangguoAICatalogUsesAvailableCategoryAPIs(t *testing.T) {
 	items, err := d.fetchHuangguoAIDramas(context.Background())
 	if err != nil || len(items) != 1 || APIs.Load() != 4 {
 		t.Fatalf("catalog paths: items=%d APIs=%d error=%v", len(items), APIs.Load(), err)
+	}
+}
+
+func TestHuangguoVideoValidListAllowsEmptyCategories(t *testing.T) {
+	for _, validList := range []bool{true, false} {
+		var calls atomic.Int32
+		d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			body := "<main>当前分类暂无内容</main>"
+			if validList && request.URL.RawQuery == "" {
+				body = `<article class="video-card"><a href="/series/fixture01" title="纯文字目录样本">目录样本</a></article>`
+			}
+			return rankingHTTPResponse(request, 200, body), nil
+		})
+		items, err := d.fetchHuangguoVideoDramas(context.Background())
+		if validList && (err != nil || len(items) != 1 || calls.Load() != 5) {
+			t.Fatal("empty category rejected a valid catalog", err, len(items), calls.Load())
+		}
+		if !validList && (err == nil || len(items) != 0 || calls.Load() != 1) {
+			t.Fatal("empty main response was reported as a successful catalog", err, len(items), calls.Load())
+		}
 	}
 }

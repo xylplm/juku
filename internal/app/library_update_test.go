@@ -224,6 +224,7 @@ func TestUnifiedUpdateReturnsImmediatelyAndDeduplicatesWork(t *testing.T) {
 		app.stopSortMetadata()
 	})
 	type snapshot struct {
+		Accepted bool                    `json:"updateAccepted"`
 		Loading  bool                    `json:"loading"`
 		Data     []Drama                 `json:"data"`
 		Metadata libraryMetadataProgress `json:"metadata"`
@@ -253,7 +254,7 @@ func TestUnifiedUpdateReturnsImmediatelyAndDeduplicatesWork(t *testing.T) {
 	}
 	path := "/api/ui/dramas?update=1&source=hongguo&priority=hongguo:800059"
 	result := read(path)
-	if !result.Loading || result.Metadata.Total != 40 || len(result.Data) != 61 {
+	if !result.Accepted || !result.Loading || result.Metadata.Total != 40 || len(result.Data) != 61 {
 		t.Fatalf("update did not immediately return cache and bounded progress: %+v", result.Metadata)
 	}
 	select {
@@ -262,7 +263,7 @@ func TestUnifiedUpdateReturnsImmediatelyAndDeduplicatesWork(t *testing.T) {
 		t.Fatal("update did not start the main catalog")
 	}
 	for _, request := range []string{path, path, "/api/ui/dramas?revision=1"} {
-		if result := read(request); !result.Loading || result.Metadata.Total != 40 {
+		if result := read(request); result.Accepted || !result.Loading || result.Metadata.Total != 40 {
 			t.Fatal("repeated update or polling duplicated work")
 		}
 	}
