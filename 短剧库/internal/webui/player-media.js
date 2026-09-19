@@ -50,8 +50,6 @@
           if (plan.player === 'hls' && !nativeHls) {
             const Hls = environment.Hls;
             if (!Hls?.isSupported()) {finish(failure('此浏览器没有可用的 HLS 播放通道', false)); return;}
-            // Keep hls.js's bounded load/retry policies and quota recovery.
-            // VOD can retain a longer forward window without delaying startup.
             hls = new Hls({enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, maxMaxBufferLength: 180,
               maxBufferSize: 48 * 1024 * 1024, backBufferLength: 20, startPosition: Math.max(0, Number(offset) || 0)});
             hls.on(Hls.Events.ERROR, (_, data) => {

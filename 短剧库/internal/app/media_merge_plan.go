@@ -74,9 +74,7 @@ func planMergeMedia(infos []mergeMediaInfo) mergeMediaPlan {
 	if plan.audio.audio && plan.audio.audioCodec == "aac" && plan.audio.audioProfile != "" && plan.audio.audioProfile != "LC" {
 		for _, info := range infos {
 			if !info.audio || info.audioKey() != plan.audio.audioKey() {
-				// The native AAC encoder cannot reproduce HE-AAC profiles. Encode
-				// every audio stream to the same LC configuration, keeping the
-				// existing video plan and leaving the source episodes untouched.
+
 				plan.audioFallback = true
 				plan.audio.audioProfile, plan.audio.audioExtra = "LC", ""
 				break

@@ -77,6 +77,7 @@ func validImageURL(remote *url.URL) bool {
 type imageTransport struct {
 	base       http.RoundTripper
 	standard   *http.Transport
+	resolver   *dnsResolver
 	lookup     func(context.Context, string) ([]string, error)
 	fallback   func(context.Context, string) ([]string, error)
 	mu         sync.Mutex
@@ -84,7 +85,15 @@ type imageTransport struct {
 }
 
 func newImageTransport(base http.RoundTripper, standard *http.Transport) *imageTransport {
-	return &imageTransport{base: base, standard: standard, lookup: net.DefaultResolver.LookupHost, transports: map[string]*http.Transport{}}
+	resolver := newDNSResolver(standard)
+	return &imageTransport{
+		base: base, standard: standard, resolver: resolver,
+		lookup: net.DefaultResolver.LookupHost, transports: map[string]*http.Transport{},
+		fallback: func(ctx context.Context, host string) ([]string, error) {
+			entry, err := resolver.lookupEntry(ctx, host, dnsAlternateSubnet)
+			return entry.addresses, err
+		},
+	}
 }
 
 func (transport *imageTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -122,8 +131,7 @@ func (transport *imageTransport) RoundTrip(request *http.Request) (*http.Respons
 			if fallbackUsed || transport.fallback == nil || accountSourceGroup(source) == "" || net.ParseIP(host) != nil || request.Context().Err() != nil {
 				return nil, addressErr
 			}
-			// A registered cover may resolve to a proxy Fake-IP or a DNS block page.
-			// Re-resolve the hostname independently; never connect to that address.
+
 			addresses, err = fallback()
 			if err != nil {
 				return nil, fmt.Errorf("%v；可信 DNS 重解析失败：%w", addressErr, err)
@@ -243,6 +251,7 @@ func (transport *imageTransport) tlsProxyDialer(host string) func(context.Contex
 }
 
 func (transport *imageTransport) CloseIdleConnections() {
+	transport.resolver.client.CloseIdleConnections()
 	if closer, ok := transport.base.(interface{ CloseIdleConnections() }); ok {
 		closer.CloseIdleConnections()
 	}

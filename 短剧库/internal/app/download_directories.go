@@ -37,8 +37,6 @@ func readDownloadDirectoryID(directory string) (string, error) {
 	return strings.TrimSpace(string(body)), err
 }
 
-// Scan only the existing flat layout and the known source folders. The marker
-// remains authoritative after task cleanup or a restart, even if a title changes.
 func scanDownloadDirectories(root string) (map[string]string, error) {
 	directories := make(map[string]string)
 	groups := map[string]bool{"其他来源": true}
@@ -61,13 +59,12 @@ func scanDownloadDirectories(root string) (map[string]string, error) {
 			directory := filepath.Join(parent, entry.Name())
 			id, err := readDownloadDirectoryID(directory)
 			if err != nil {
-				// An unrelated damaged marker must not block every download.
-				// Claiming this directory still requires a valid owner below.
+
 				continue
 			}
 			if id != "" {
 				if previous, exists := directories[id]; exists && previous != directory {
-					directories[id] = "" // Ambiguous ownership must not create a third copy.
+					directories[id] = ""
 				} else if !exists {
 					directories[id] = directory
 				}

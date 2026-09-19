@@ -205,8 +205,7 @@ func (app *UIApp) streamPlayback(ctx context.Context, cancel context.CancelFunc,
 		if remux {
 			args = playbackRemuxArgs(media, input)
 		}
-		// A prefetched process continues after the episode becomes current.
-		// Keep the normal bounded thread count so it can sustain foreground playback.
+
 		kind := "video"
 		if remux {
 			kind = "remux"

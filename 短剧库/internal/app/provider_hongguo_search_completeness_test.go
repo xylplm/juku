@@ -30,12 +30,12 @@ func hongguoSearchCompletenessFixtures() (string, string) {
 		seasons = append(seasons, map[string]any{"video_data": video})
 		names = append(names, map[string]any{"name": title, "word_type": "short_play_name", "keyword": id, "video_data": video})
 	}
-	// Reproduce the website's ten rows: only seasons 1, 2 and 4, mixed with related shows.
+
 	rows = append(rows, seasons[0], seasons[1], seasons[3])
 	for i := 0; i < 7; i++ {
 		rows = append(rows, map[string]any{"video_data": map[string]any{"series_id": fmt.Sprintf("70000000000000001%02d", i), "series_title": fmt.Sprintf("相关剧集%d", i), "series_intro": "冒险相关内容", "category_name": "短剧", "hot_score_data": map[string]any{"score": 9000 + i}}})
 	}
-	// Formal search must retain all returned name records, even beyond ten or twenty.
+
 	for i := 0; i < 15; i++ {
 		id := fmt.Sprintf("70000000000000002%02d", i)
 		names = append(names, map[string]any{"name": fmt.Sprintf("其他名称%d", i), "word_type": "short_play_name", "video_data": map[string]any{"series_id": json.Number(id), "series_title": fmt.Sprintf("其他名称%d", i)}})
@@ -93,7 +93,7 @@ func TestHongguoSearchCompletesMissingSeasonsBeyondFirstTen(t *testing.T) {
 			t.Error("novel or unverified candidate became a drama", id)
 		}
 	}
-	// A caller cannot mutate cached results, including the tags slice.
+
 	result.Dramas[0].Title, result.Dramas[0].Tags[0] = "改动", "改动"
 	result, err = d.searchHongguoDramas(context.Background(), " "+hongguoSeasonSearchQuery+" ")
 	if err != nil || result.Dramas[0].Title == "改动" || result.Dramas[0].Tags[0] == "改动" || pageCalls.Load() != 1 || nameCalls.Load() != 1 {

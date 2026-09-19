@@ -26,8 +26,6 @@ type hongguoSearchSuggestion struct {
 	Type string `json:"type,omitempty"`
 }
 
-// Keep the upstream ID as json.Number or a string. Series IDs exceed the
-// precision of float64; the compact autocomplete response does not expose them.
 type hongguoSuggestionRecord struct {
 	Name      string         `json:"name"`
 	WordType  string         `json:"word_type"`
@@ -70,7 +68,7 @@ func (d *Downloader) hongguoSearchSuggestions(ctx context.Context, query string)
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-pending.done:
-				// An earlier browser may cancel while another still needs this query.
+
 				if errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded) {
 					continue
 				}
@@ -150,7 +148,7 @@ func (d *Downloader) fetchHongguoSuggestionRecords(ctx context.Context, query st
 	request.Header.Set("Referer", hongguoBaseURL+"/")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	// One short request per query; reuse the source limiter, proxy and backoff.
+
 	response, err := d.doCatalogRequestWithTimeout(request, hongguoSuggestionTimeout)
 	if err != nil {
 		return nil, err

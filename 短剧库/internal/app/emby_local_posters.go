@@ -66,7 +66,7 @@ func inspectEmbyArtwork(directory string, manifest embyFolderManifest) (managed,
 			return "", "", errors.New("Emby 海报不是普通文件，已保留原内容")
 		}
 		if name != manifest.PosterFile || manifest.PosterHash == "" || info.Size() > maxCoverBytes {
-			return "", name, nil // User-provided artwork is never overwritten.
+			return "", name, nil
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {
@@ -105,8 +105,7 @@ func (app *UIApp) syncLocalEmbyPoster(ctx context.Context, settings embySyncSett
 	if err = ctx.Err(); err != nil {
 		return "", false, err
 	}
-	// Fetching can take time. Recheck ownership and custom artwork immediately
-	// before writing, and preserve any manifest changes made during the fetch.
+
 	directory, manifest, err = readEmbyPosterDirectory(settings, drama, folder)
 	if err != nil {
 		return "", false, err

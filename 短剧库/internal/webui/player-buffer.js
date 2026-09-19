@@ -88,8 +88,6 @@
           return;
         } catch (error) {
           if (error.name !== 'QuotaExceededError') throw error;
-          // Like hls.js, lower the forward target and release played media on
-          // quota pressure. Keep this exact chunk until it has been appended.
           ceiling = Math.max(4, Math.min(ceiling / 2, snapshot(video).ahead * 0.75 || ceiling / 2));
           budget = Math.max(4 * 1024 * 1024, budget / 2);
           keepBehind = Math.min(keepBehind, 10);

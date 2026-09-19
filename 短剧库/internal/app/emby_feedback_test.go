@@ -30,7 +30,7 @@ func TestEmbySourceGroupingKeepsOldFoldersAndStableLinks(t *testing.T) {
 	before, _ := os.ReadFile(first)
 	settings.GroupBySource = true
 	drama.Title = "修改后的标题"
-	// Recover by the manifest after the global entry cache has been lost.
+
 	same, _, _, err := syncEmbyDramaFiles(ctx, settings, drama, embySyncTestChapters(), "", key, "owner")
 	if err != nil || same != flat || strings.Contains(same, "/") {
 		t.Fatal("grouping or title change duplicated an old export", same, err)
@@ -296,7 +296,7 @@ func TestEmbyLocalPosterIsStableAndPreservesCustomArtwork(t *testing.T) {
 	if body, _ := os.ReadFile(posterPath); !bytes.Equal(body, custom) {
 		t.Fatal("custom image bytes changed")
 	}
-	// A poster placed by the user while the network request is running wins.
+
 	settings.OutputDir = t.TempDir()
 	folder, _, _, err = syncEmbyDramaFiles(ctx, settings, drama, embySyncTestChapters(), "", key, "owner")
 	if err != nil {

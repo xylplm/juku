@@ -51,7 +51,7 @@ func TestIncompleteGeneratedPlaybackFallsBackAndReleasesCache(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// Resource and cancellation errors must not bypass the configured limits.
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	media := &playbackMediaSession{ctx: ctx, cancel: cancel, plan: playbackMediaPlan{}}

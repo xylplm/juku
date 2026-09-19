@@ -86,7 +86,7 @@ func TestPlaybackNativeBuffersAheadAcrossThreePrefetchedEpisodes(t *testing.T) {
 		if episode > 1 && (cache != prefetched || string(opened["prefetched"]) != "true" || backgroundPlayback(cache.ctx)) {
 			t.Fatal("next episode did not adopt its cache with foreground priority")
 		}
-		waitAhead(cache) // Only segment zero has been requested so far.
+		waitAhead(cache)
 		if episode == 3 {
 			break
 		}

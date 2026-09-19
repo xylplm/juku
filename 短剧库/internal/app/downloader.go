@@ -83,10 +83,6 @@ func NewDownloader(cfg Config) *Downloader {
 		}
 		return net.DefaultResolver.LookupHost(ctx, host)
 	}
-	images.fallback = func(ctx context.Context, host string) ([]string, error) {
-		entry, err := resolver.lookupEntry(ctx, host, cdnAlternateSubnet)
-		return entry.addresses, err
-	}
 	downloader.client = &http.Client{Transport: images, Timeout: 45 * time.Second}
 	return downloader
 }

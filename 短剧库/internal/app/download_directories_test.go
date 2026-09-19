@@ -39,7 +39,7 @@ func TestDownloadGroupingKeepsExistingDirectoriesAcrossChanges(t *testing.T) {
 	if groupedPaths[0] == groupedPaths[1] {
 		t.Fatal("same title from different sources collided")
 	}
-	// No task records or memory cache survive this restart.
+
 	d = &Downloader{cfg: cfg}
 	if same, err := d.downloadDramaDirectory(old, old.Title, ""); err != nil || same != flat {
 		t.Fatal("restart lost the original flat directory", same, err)

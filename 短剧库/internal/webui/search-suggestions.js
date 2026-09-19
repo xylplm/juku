@@ -123,7 +123,6 @@ export function createSearchSuggestions({input, panel, list, enabled, load, sele
         label.appendChild(text);
       }
       option.append(searchIcon(), label);
-      // Keep focus in the combobox without blocking touch scrolling.
       option.addEventListener('mousedown', event => {if (event.button === 0) event.preventDefault();});
       option.addEventListener('click', () => choose(index));
       list.appendChild(option);

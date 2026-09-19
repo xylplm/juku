@@ -9,67 +9,41 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 )
+
+const dnsAlternateSubnet = "8.8.8.0/24"
 
 type dnsCacheEntry struct {
 	addresses []string
 	expires   time.Time
 }
 
-type safeDNSDialer struct {
+type dnsResolver struct {
 	client    *http.Client
-	dialer    net.Dialer
 	mu        sync.Mutex
 	cache     map[string]dnsCacheEntry
 	inFlight  map[string]chan struct{}
 	endpoints []string
 }
 
-func newSafeDNSDialer(transport *http.Transport) *safeDNSDialer {
+func newDNSResolver(transport *http.Transport) *dnsResolver {
 	lookupTransport := transport.Clone()
 	lookupTransport.TLSClientConfig = nil
-	return &safeDNSDialer{
+	return &dnsResolver{
 		client: &http.Client{Transport: lookupTransport, Timeout: 4 * time.Second},
-		dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second},
 		cache:  map[string]dnsCacheEntry{}, inFlight: map[string]chan struct{}{},
 		endpoints: []string{"https://dns.alidns.com/resolve", "https://dns.google/resolve"},
 	}
 }
 
-func protectedCDNHost(host string) bool {
-	host = strings.ToLower(host)
-	return isHuangguoImageCDNHost(host) || strings.HasSuffix(host, ".lkkwip.cn")
-}
-
-func (resolver *safeDNSDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil || !protectedCDNHost(host) {
-		return resolver.dialer.DialContext(ctx, network, address)
-	}
-	addresses, err := resolver.lookup(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("%s 安全 DNS 解析失败，可在网络设置中启用可用代理: %w", host, err)
-	}
-	var lastErr error
-	for _, resolved := range addresses {
-		connection, err := resolver.dialer.DialContext(ctx, network, net.JoinHostPort(resolved, port))
-		if err == nil {
-			return connection, nil
-		}
-		lastErr = err
-	}
-	return nil, fmt.Errorf("%s 的 CDN 无法直连，请检查代理配置: %w", host, lastErr)
-}
-
-func (resolver *safeDNSDialer) lookup(ctx context.Context, host string) ([]string, error) {
+func (resolver *dnsResolver) lookup(ctx context.Context, host string) ([]string, error) {
 	entry, err := resolver.lookupEntry(ctx, host, "")
 	return entry.addresses, err
 }
 
-func (resolver *safeDNSDialer) lookupEntry(ctx context.Context, host, subnet string) (dnsCacheEntry, error) {
+func (resolver *dnsResolver) lookupEntry(ctx context.Context, host, subnet string) (dnsCacheEntry, error) {
 	cacheKey := host + "|" + subnet
 	for {
 		resolver.mu.Lock()
@@ -101,9 +75,12 @@ func (resolver *safeDNSDialer) lookupEntry(ctx context.Context, host, subnet str
 	return entry, err
 }
 
-func (resolver *safeDNSDialer) query(ctx context.Context, host, subnet string) (dnsCacheEntry, error) {
-	var lastErr error
+func (resolver *dnsResolver) query(ctx context.Context, host, subnet string) (dnsCacheEntry, error) {
+	lastErr := errors.New("DoH 未返回公网 IPv4 地址")
 	for _, endpoint := range resolver.endpoints {
+		if err := ctx.Err(); err != nil {
+			return dnsCacheEntry{}, err
+		}
 		lookupURL, err := url.Parse(endpoint)
 		if err != nil {
 			return dnsCacheEntry{}, err
@@ -141,24 +118,33 @@ func (resolver *safeDNSDialer) query(ctx context.Context, host, subnet string) (
 		}
 		entry := dnsCacheEntry{}
 		ttl := 300
+		var addressErr error
 		for _, answer := range payload.Answer {
-			address := net.ParseIP(answer.Data)
-			if answer.Type != 1 || address == nil || address.To4() == nil || !address.IsGlobalUnicast() || address.IsPrivate() {
+			if answer.Type != 1 {
 				continue
+			}
+			address := net.ParseIP(answer.Data)
+			if address == nil || address.To4() == nil {
+				addressErr = errors.New("DoH 返回无效 IPv4 地址")
+				break
 			}
 			entry.addresses = append(entry.addresses, address.String())
 			if answer.TTL < ttl {
 				ttl = answer.TTL
 			}
 		}
-		if len(entry.addresses) > 0 {
-			if ttl < 1 {
-				ttl = 1
-			}
-			entry.expires = time.Now().Add(time.Duration(ttl) * time.Second)
-			return entry, nil
+		if addressErr == nil {
+			addressErr = validateImageAddresses(entry.addresses)
 		}
-		lastErr = errors.New("DoH 未返回公网 IPv4 地址")
+		if addressErr != nil {
+			lastErr = fmt.Errorf("DoH 未返回可用公网 IPv4 地址：%w", addressErr)
+			continue
+		}
+		if ttl < 1 {
+			ttl = 1
+		}
+		entry.expires = time.Now().Add(time.Duration(ttl) * time.Second)
+		return entry, nil
 	}
 	return dnsCacheEntry{}, lastErr
 }

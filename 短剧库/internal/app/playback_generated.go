@@ -92,8 +92,7 @@ func (app *UIApp) generatePlayback(ctx context.Context, media *playbackMediaSess
 		input = filepath.ToSlash(input)
 	}
 	command := ffmpegMediaCommand(jobCtx, ffmpeg, playbackGeneratedArgs(media.media, input, processing)...)
-	// Keep all HLS output names relative to one working directory. FFmpeg's
-	// playlist and init-segment path handling differs between Windows builds.
+
 	command.Dir = directory
 	log := &playbackLog{text: cappedStringWriter{limit: 64 * 1024}, ready: make(chan struct{})}
 	command.Stderr = log

@@ -1,6 +1,5 @@
 export function normalizeSearchText(value) {
   const text = String(value ?? '').normalize('NFKC').toLowerCase().trim();
-  // Keep symbols such as '+' meaningful, but ignore title punctuation and spacing.
   return text.replace(/[\p{P}\s]+/gu, '') || text;
 }
 

@@ -384,8 +384,7 @@ func (cache *playbackNative) prefillLocked(index int) {
 	}
 	select {
 	case <-job.done:
-		// Prepare the next batch while a useful amount is still playable.
-		// Limit both the forward window and its compressed bytes.
+
 		next, size := index, 0
 		for len(cache.segments[next]) > 0 {
 			size += len(cache.segments[next])

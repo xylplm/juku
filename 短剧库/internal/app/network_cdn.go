@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const cdnAlternateSubnet = "8.8.8.0/24"
-
 type cdnRoute struct {
 	address string
 	expires time.Time
@@ -67,7 +65,7 @@ func (transport *cdnTransport) RoundTrip(request *http.Request) (*http.Response,
 		return nil, request.Context().Err()
 	}
 	lastErr := err
-	subnets := []string{cdnAlternateSubnet, ""}
+	subnets := []string{dnsAlternateSubnet, ""}
 	for _, subnet := range subnets {
 		entry, lookupErr := transport.resolver.lookupEntry(request.Context(), request.URL.Hostname(), subnet)
 		if lookupErr != nil {

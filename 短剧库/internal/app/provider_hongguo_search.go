@@ -81,7 +81,7 @@ func (downloader *Downloader) searchHongguoDramas(ctx context.Context, keyword s
 		client.mu.Unlock()
 		entry, err := downloader.fetchHongguoSearch(ctx, keyword)
 		client.mu.Lock()
-		// A partial success must be retryable immediately, not cached for five minutes.
+
 		if err == nil && entry.Warning == "" {
 			if len(client.searches) >= 64 {
 				client.searches = map[string]hongguoSearchEntry{}
@@ -98,10 +98,7 @@ func (downloader *Downloader) searchHongguoDramas(ctx context.Context, keyword s
 }
 
 func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword string) (hongguoSearchEntry, error) {
-	// The website search only returns its first batch, even with page/offset
-	// parameters. Its name index has different recall and includes missing seasons.
-	// The source limiter serializes these requests. Fetch the small name response
-	// first so a slow HTML page cannot consume its shorter request deadline.
+
 	names, namesErr := downloader.fetchHongguoSearchNames(ctx, keyword)
 	if err := ctx.Err(); err != nil {
 		return hongguoSearchEntry{}, err
@@ -150,7 +147,7 @@ func (downloader *Downloader) fetchHongguoSearchNames(ctx context.Context, keywo
 	}
 	dramas := make([]Drama, 0, len(records))
 	for _, record := range records {
-		// Novel titles and unverified name-only candidates are not playable dramas.
+
 		if record.WordType != "short_play_name" || !hongguoNumericID.MatchString(mapString(record.VideoData, "series_id_str", "series_id")) {
 			continue
 		}
@@ -224,8 +221,7 @@ func (downloader *Downloader) fetchHongguoSearchPage(ctx context.Context, keywor
 		return hongguoSearchEntry{}, errors.New("红果搜索结果中没有可识别的剧集")
 	}
 	entry.Total, _ = strconv.Atoi(mapString(page, "totalCount"))
-	// This is an upstream estimate, not a cursor or a promise that all results
-	// have been fetched. Do not synthesize "next pages" from ignored parameters.
+
 	entry.Limited = entry.Total > len(entry.Dramas)
 	if entry.Total < len(entry.Dramas) {
 		entry.Total = len(entry.Dramas)

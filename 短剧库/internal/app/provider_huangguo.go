@@ -481,8 +481,6 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 	return body, err
 }
 
-// fetchProviderTextURL keeps the response URL with its body so relative media
-// references use the same base after redirects or provider mirror selection.
 func (d *Downloader) fetchProviderTextURL(ctx context.Context, rawURL, referer string) (string, string, error) {
 	retries := d.cfg.Retries
 	if retries <= 0 {

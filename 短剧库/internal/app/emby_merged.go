@@ -107,7 +107,7 @@ func (app *UIApp) embyExportChapters(ctx context.Context, id string, merged *emb
 	title, chapters, err := app.downloader.GetDramaChapters(lookup, id)
 	if err != nil && ctx.Err() == nil {
 		app.downloader.recordDiagnostic(diagnosticEvent{Level: "warn", Event: "emby.metadata_fallback", DramaID: id, Message: app.redactError(err)})
-		return "", nil, nil // A completed local merge can be exported while its source is unavailable.
+		return "", nil, nil
 	}
 	return title, chapters, err
 }
