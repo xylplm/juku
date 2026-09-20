@@ -1,4 +1,5 @@
 import { $, element, button, icon, coverURL, withFocus, dramaTitle, sourceKey, sourceLabel, categoryName, episodeCount, firstNonEmpty, tagsText, releaseText, setMessage } from './ui-core.js';
+import { retryCoverURL } from './cover-retry.js';
 
 export function createDetails(app) {
   let currentID = '';
@@ -45,7 +46,7 @@ export function createDetails(app) {
       if (!current.failed) return;
       current.failed = false;
       status.textContent = '加载海报…';
-      image.src = address;
+      image.src = retryCoverURL(address);
     };
     node.appendChild(image);
     image.src = address;

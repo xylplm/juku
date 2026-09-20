@@ -7,6 +7,27 @@ const modulePromise = import('data:text/javascript;base64,' + Buffer.from(source
 const id = 'hongguo:7000000000000000001';
 const row = (title, checkedAt) => ({id, title, sortMetadata: {checkedAt}});
 
+test('explicit clicks retry the cover while metadata is pending or cooling down', async () => {
+  const {createDramaRefresh} = await modulePromise;
+  let calls = 0, finish;
+  const retries = [];
+  const refresh = createDramaRefresh({now: () => 1000, retryCover: dramaID => retries.push(dramaID), apply() {}, post: async () => {
+    calls++;
+    return new Promise(resolve => {finish = resolve;});
+  }});
+  const first = refresh.refresh(id);
+  assert.deepEqual(retries, [id]);
+  const pending = refresh.refresh(id);
+  assert.equal(first, pending);
+  assert.deepEqual(retries, [id, id]);
+  await Promise.resolve();
+  finish({dramaId: id, drama: row('无图测试', '2026-09-19T02:00:00Z'), retryAfter: 300});
+  await first;
+  await refresh.refresh(id);
+  assert.deepEqual(retries, [id, id, id]);
+  assert.equal(calls, 1);
+});
+
 test('title and cover refresh share one request and respect the server cooldown', async () => {
   const {createDramaRefresh} = await modulePromise;
   let timestamp = 1000, calls = 0, finish;

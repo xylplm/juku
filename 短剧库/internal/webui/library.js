@@ -1,5 +1,6 @@
 import { createCardViewport } from './card-viewport.js';
 import { createCoverRepair } from './cover-repair.js';
+import { retryCoverURL } from './cover-retry.js';
 import { createDramaRefresh } from './drama-refresh.js';
 import { createRecommendations } from './recommendations.js';
 import { createSearchSuggestions } from './search-suggestions.js';
@@ -45,10 +46,15 @@ export function createLibrary(app) {
     app.details.refreshCover(id, address === previous);
     app.following.refreshCover(id);
   }});
-  const dramaRefresh = createDramaRefresh({post, apply: applyDramaRefresh, failure: (id) => {
+  const dramaRefresh = createDramaRefresh({post, apply: applyDramaRefresh, retryCover: retryDramaCover, failure: (id) => {
     app.details.metadataStatus(id, '资料暂未更新，已保留原有信息；稍后重新打开可重试。');
     coverRepair.touch(id);
   }});
+  function retryDramaCover(id) {
+    for (const card of cards.querySelectorAll('.card')) {if (card.dataset.dramaId === id) card.retryCover?.();}
+    app.details.refreshCover(id, true);
+    app.following.retryCovers(id);
+  }
   function reconcileDrama(drama) {return coverRepair.reconcile(dramaRefresh.reconcile(drama));}
   function applyDramaRefresh(drama, warning) {
     const previous = byID.get(drama.id), index = dramas.findIndex(item => item.id === drama.id);
@@ -151,7 +157,7 @@ function renderCard(drama) {
     image.addEventListener('error', () => {image.replaceWith(fallback); coverRepair.failed(drama.id, cover);});
     image.addEventListener('load', () => coverRepair.loaded(drama.id, cover));
     image.src = cover;
-    card.retryCover = () => {if (fallback.isConnected) {image.src = cover; fallback.replaceWith(image);}};
+    card.retryCover = () => {if (fallback.isConnected) {image.src = retryCoverURL(cover); fallback.replaceWith(image);}};
     poster.appendChild(image);
   } else poster.appendChild(fallback);
   poster.appendChild(element('span', 'poster-badge', sourceLabel(sourceKey(drama))));

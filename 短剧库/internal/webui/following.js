@@ -1,4 +1,5 @@
 import { $, element, button, icon, initial, withFocus, dramaTitle, sourceKey, sourceLabel, episodeCount, coverURL, number, setMessage } from './ui-core.js';
+import { retryCoverURL } from './cover-retry.js';
 
 export function createFollowing(app) {
   const entries = new Map(), pending = new Set();
@@ -53,6 +54,7 @@ export function createFollowing(app) {
 
   function renderCover(record) {
     const poster = element('span', 'following-cover');
+    poster.coverAddress = record.cover;
     poster.setAttribute('aria-hidden', 'true');
     const fallback = element('span', '', initial(record.title));
     if (record.cover) {
@@ -63,7 +65,7 @@ export function createFollowing(app) {
       image.addEventListener('error', () => {image.replaceWith(fallback); app.library?.coverFailed(record.id, record.cover);});
       image.addEventListener('load', () => app.library?.coverLoaded(record.id, record.cover));
       image.src = record.cover;
-      poster.retryCover = () => {if (fallback.isConnected) {image.src = record.cover; fallback.replaceWith(image);}};
+      poster.retryCover = () => {if (fallback.isConnected) {image.src = retryCoverURL(record.cover); fallback.replaceWith(image);}};
       poster.appendChild(image);
     } else poster.appendChild(fallback);
     return poster;
@@ -72,8 +74,18 @@ export function createFollowing(app) {
   function refreshCover(id) {
     const drama = app.library?.get(id);
     if (!drama) return;
+    const cover = coverURL(drama);
     for (const row of $('followingList').querySelectorAll('.following-row')) {
-      if (row.dataset.dramaId === id) row.querySelector('.following-cover')?.replaceWith(renderCover({id, title: dramaTitle(drama), cover: coverURL(drama)}));
+      if (row.dataset.dramaId !== id) continue;
+      const poster = row.querySelector('.following-cover');
+      if (poster?.coverAddress === cover) poster.retryCover?.();
+      else poster?.replaceWith(renderCover({id, title: dramaTitle(drama), cover}));
+    }
+  }
+
+  function retryCovers(id) {
+    for (const row of $('followingList').querySelectorAll('.following-row')) {
+      if (!id || row.dataset.dramaId === id) row.querySelector('.following-cover')?.retryCover?.();
     }
   }
 
@@ -215,5 +227,5 @@ export function createFollowing(app) {
     return refresh();
   }
 
-  return {init, render, refresh, refreshCover, retryCovers: () => $('followingList').querySelectorAll('.following-cover').forEach(poster => poster.retryCover?.()), get, toggleSaved, setCompleted, saveButton, showTab, busy: id => pending.has(id), acknowledge: id => {if (get(id)?.newEpisodes) change(id, {acknowledge: true});}};
+  return {init, render, refresh, refreshCover, retryCovers, get, toggleSaved, setCompleted, saveButton, showTab, busy: id => pending.has(id), acknowledge: id => {if (get(id)?.newEpisodes) change(id, {acknowledge: true});}};
 }

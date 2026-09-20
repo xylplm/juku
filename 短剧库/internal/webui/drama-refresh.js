@@ -1,4 +1,4 @@
-export function createDramaRefresh({post, apply, failure, now = Date.now}) {
+export function createDramaRefresh({post, apply, failure, retryCover, now = Date.now}) {
   const pending = new Map(), retryAt = new Map(), latest = new Map();
   const checkedAt = drama => Date.parse(drama?.sortMetadata?.checkedAt) || 0;
 
@@ -13,6 +13,7 @@ export function createDramaRefresh({post, apply, failure, now = Date.now}) {
   }
 
   function refresh(id) {
+    retryCover?.(id);
     if (pending.has(id)) return pending.get(id);
     if (now() < (retryAt.get(id) || 0)) return Promise.resolve();
     retryAt.set(id, now() + 300000);

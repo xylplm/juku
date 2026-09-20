@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -945,7 +946,7 @@ func decodeImageBytes(buf []byte, remoteURL string) []byte {
 		return buf
 	}
 	if decoded := decryptHuangguoImage(buf); isKnownImage(decoded) || isHEICImage(decoded) {
-		return decoded
+		return trimHuangguoImagePadding(decoded)
 	}
 	copyBuf := append([]byte(nil), buf...)
 	decryptImageHeader(copyBuf)
@@ -956,31 +957,42 @@ func decodeImageBytes(buf []byte, remoteURL string) []byte {
 }
 
 func decryptHuangguoImage(buf []byte) []byte {
-	if len(buf) == 0 || len(buf)%aes.BlockSize != 0 {
+	if bytes.HasPrefix(buf, []byte("Salted__")) {
+		if len(buf) <= 16 {
+			return nil
+		}
+		buf = buf[16:]
+	}
+	if len(buf) == 0 || len(buf) > maxCoverBytes {
 		return nil
 	}
 	block, err := aes.NewCipher([]byte("f5d965df75336270"))
 	if err != nil {
 		return nil
 	}
-	out := make([]byte, len(buf))
-	cipher.NewCBCDecrypter(block, []byte("97b60394abc2fbe1")).CryptBlocks(out, buf)
-	if len(out) > 0 {
-		pad := int(out[len(out)-1])
-		if pad > 0 && pad <= aes.BlockSize && pad <= len(out) {
+	out := make([]byte, (len(buf)+aes.BlockSize-1)/aes.BlockSize*aes.BlockSize)
+	copy(out, buf)
+	cipher.NewCBCDecrypter(block, []byte("97b60394abc2fbe1")).CryptBlocks(out, out)
+	return out[:len(buf)]
+}
+
+func trimHuangguoImagePadding(buf []byte) []byte {
+	if len(buf) > 0 {
+		pad := int(buf[len(buf)-1])
+		if pad > 0 && pad <= aes.BlockSize && pad <= len(buf) {
 			valid := true
-			for _, b := range out[len(out)-pad:] {
+			for _, b := range buf[len(buf)-pad:] {
 				if int(b) != pad {
 					valid = false
 					break
 				}
 			}
 			if valid {
-				out = out[:len(out)-pad]
+				buf = buf[:len(buf)-pad]
 			}
 		}
 	}
-	return out
+	return buf
 }
 
 func decryptImageHeader(buf []byte) {
