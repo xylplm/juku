@@ -347,20 +347,25 @@ async function searchOnline(){
     const keyword=$('searchInput').value.trim();if(!keyword){setMessage('请先输入搜索词',true);return;}if(searchController)return;
     resetOnlineSearch();const sequence=searchSequence;const controller=new AbortController();searchController=controller;
     $('onlineSearchBtn').disabled=true;$('onlineSearchBtn').textContent='搜索中';onlineSearchMessage='正在联网搜索红果';updateLibraryStatus();
+    let received=0;
     try{
-      const result=await api('/api/ui/search?q='+encodeURIComponent(keyword),{signal:controller.signal});
-      if(sequence!==searchSequence||keyword!==$('searchInput').value.trim())return;
-      if(result.query!==keyword||!Array.isArray(result.data))throw new Error('未收到有效的搜索结果');
-      const matches=(Array.isArray(result.data)?result.data:[]).filter(drama=>sourceKey(drama)==='hongguo');
-      onlineSearchQuery=normalizeSearchText(keyword);onlineSearchIDs=new Set(matches.map(drama=>drama.id));
+      await api('/api/ui/search?q='+encodeURIComponent(keyword)+'&stream=1',{signal:controller.signal,onResult:result=>{
+        if(sequence!==searchSequence||controller.signal.aborted||keyword!==$('searchInput').value.trim())return;
+        if(result.query!==keyword||result.source!=='hongguo'||!Array.isArray(result.data))throw new Error('未收到有效的搜索结果');
+        const matches=result.data.filter(drama=>sourceKey(drama)==='hongguo');
+        onlineSearchQuery=normalizeSearchText(keyword);onlineSearchIDs=new Set(matches.map(drama=>drama.id));received=onlineSearchIDs.size;
 
-      const positions=new Map(dramas.map((drama,index)=>[drama.id,index]));for(let drama of matches){drama=reconcileDrama(drama);const position=positions.get(drama.id);if(position===undefined){positions.set(drama.id,dramas.length);dramas.push(drama);}else dramas[position]=drama;}
-      onlineSearchMessage=matches.length?'联网找到 '+matches.length+' 部红果':'联网暂无匹配';
-      if(result.warning)onlineSearchMessage+='；'+result.warning;
-      else if(result.limited)onlineSearchMessage+='；可尝试完整剧名查找其他结果';
-      if(matches.length&&result.saved===false)onlineSearchMessage+='，缓存未保存';
-      for(const drama of dramas)byID.set(drama.id,drama);rebuildSources();rebuildChannels(false);renderDramas();app.following.render();updateLibraryStatus();libraryRevision=0;await loadDramas(false);
-    }catch(error){if(sequence===searchSequence&&!controller.signal.aborted){onlineSearchMessage='联网搜索暂不可用：'+error.message+'；可重试，本地筛选仍可使用';updateLibraryStatus();}}
+        const positions=new Map(dramas.map((drama,index)=>[drama.id,index]));for(let drama of matches){drama=reconcileDrama(drama);const position=positions.get(drama.id);if(position===undefined){positions.set(drama.id,dramas.length);dramas.push(drama);}else dramas[position]=drama;}
+        onlineSearchMessage=received?'联网找到 '+received+' 部红果':'联网暂无匹配';
+        if(!result.done)onlineSearchMessage+='，继续查找中';
+        else if(result.warning)onlineSearchMessage+='；'+result.warning;
+        else if(result.limited)onlineSearchMessage+='；可尝试完整剧名查找其他结果';
+        if(received&&result.saved===false)onlineSearchMessage+='，缓存未保存';
+        for(const drama of dramas)byID.set(drama.id,drama);rebuildSources();rebuildChannels(false);renderDramas();app.following.render();updateLibraryStatus();
+      }});
+      if(sequence!==searchSequence||controller.signal.aborted)return;
+      libraryRevision=0;await loadDramas(false);
+    }catch(error){if(sequence===searchSequence&&!controller.signal.aborted){onlineSearchMessage=(received?'已保留 '+received+' 部红果；':'')+'联网搜索暂不可用：'+error.message+'；可重试，本地筛选仍可使用';updateLibraryStatus();}}
     finally{if(sequence===searchSequence){searchController=null;$('onlineSearchBtn').disabled=false;$('onlineSearchBtn').textContent='联网搜索';}}
   }
 

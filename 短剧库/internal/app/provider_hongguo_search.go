@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	hongguoSearchTimeout      = 20 * time.Second
+	hongguoSearchTimeout      = 40 * time.Second
 	hongguoSearchPageTimeout  = 12 * time.Second
 	hongguoSearchPendingLimit = 32
 	hongguoSearchNameCount    = 50
@@ -30,9 +30,21 @@ type hongguoSearchEntry struct {
 }
 
 type hongguoSearchCall struct {
-	done  chan struct{}
-	entry hongguoSearchEntry
-	err   error
+	done     chan struct{}
+	changed  chan struct{}
+	entry    hongguoSearchEntry
+	snapshot hongguoSearchEntry
+	revision uint64
+	err      error
+}
+
+type hongguoSearchProgressKey struct{}
+
+func reportHongguoSearchProgress(ctx context.Context, entry hongguoSearchEntry) {
+	if progress, ok := ctx.Value(hongguoSearchProgressKey{}).(func(hongguoSearchEntry)); ok && len(entry.Dramas) > 0 {
+		entry.Total = max(entry.Total, len(entry.Dramas))
+		progress(entry)
+	}
 }
 
 func hongguoSearchKeyword(keyword string) (string, error) {
@@ -44,6 +56,10 @@ func hongguoSearchKeyword(keyword string) (string, error) {
 }
 
 func (downloader *Downloader) searchHongguoDramas(ctx context.Context, keyword string) (hongguoSearchEntry, error) {
+	return downloader.searchHongguoDramasProgress(ctx, keyword, nil)
+}
+
+func (downloader *Downloader) searchHongguoDramasProgress(ctx context.Context, keyword string, progress func(hongguoSearchEntry)) (hongguoSearchEntry, error) {
 	keyword, err := hongguoSearchKeyword(keyword)
 	if err != nil {
 		return hongguoSearchEntry{}, err
@@ -62,24 +78,31 @@ func (downloader *Downloader) searchHongguoDramas(ctx context.Context, keyword s
 		}
 		if pending := client.searchPending[keyword]; pending != nil {
 			client.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return hongguoSearchEntry{}, ctx.Err()
-			case <-pending.done:
-				if (errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded)) && ctx.Err() == nil {
-					continue
-				}
-				return cloneHongguoSearchEntry(pending.entry), pending.err
+			entry, err := downloader.waitHongguoSearch(ctx, pending, progress)
+			if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() == nil {
+				continue
 			}
+			return entry, err
 		}
 		if len(client.searchPending) >= hongguoSearchPendingLimit {
 			client.mu.Unlock()
 			return hongguoSearchEntry{}, errors.New("红果搜索请求较多，请稍后重试")
 		}
-		pending := &hongguoSearchCall{done: make(chan struct{})}
+		pending := &hongguoSearchCall{done: make(chan struct{}), changed: make(chan struct{})}
 		client.searchPending[keyword] = pending
 		client.mu.Unlock()
-		entry, err := downloader.fetchHongguoSearch(ctx, keyword)
+		fetchCtx := context.WithValue(ctx, hongguoSearchProgressKey{}, func(entry hongguoSearchEntry) {
+			client.mu.Lock()
+			pending.snapshot = cloneHongguoSearchEntry(entry)
+			pending.revision++
+			close(pending.changed)
+			pending.changed = make(chan struct{})
+			client.mu.Unlock()
+			if progress != nil {
+				progress(cloneHongguoSearchEntry(entry))
+			}
+		})
+		entry, err := downloader.fetchHongguoSearch(fetchCtx, keyword)
 		client.mu.Lock()
 
 		if err == nil && entry.Warning == "" {
@@ -97,12 +120,39 @@ func (downloader *Downloader) searchHongguoDramas(ctx context.Context, keyword s
 	}
 }
 
+func (downloader *Downloader) waitHongguoSearch(ctx context.Context, pending *hongguoSearchCall, progress func(hongguoSearchEntry)) (hongguoSearchEntry, error) {
+	client := downloader.hongguoClient()
+	var revision uint64
+	for {
+		client.mu.Lock()
+		changed := pending.changed
+		var update *hongguoSearchEntry
+		if progress != nil && pending.revision > revision {
+			entry := cloneHongguoSearchEntry(pending.snapshot)
+			update = &entry
+			revision = pending.revision
+		}
+		client.mu.Unlock()
+		if update != nil {
+			progress(*update)
+		}
+		select {
+		case <-ctx.Done():
+			return hongguoSearchEntry{}, ctx.Err()
+		case <-pending.done:
+			return cloneHongguoSearchEntry(pending.entry), pending.err
+		case <-changed:
+		}
+	}
+}
+
 func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword string) (hongguoSearchEntry, error) {
 
 	names, namesErr := downloader.fetchHongguoSearchNames(ctx, keyword)
 	if err := ctx.Err(); err != nil {
 		return hongguoSearchEntry{}, err
 	}
+	reportHongguoSearchProgress(ctx, hongguoSearchEntry{Dramas: mergeHongguoSearchDramas([]Drama{}, names), Limited: true})
 	pageCtx, cancel := context.WithTimeout(ctx, hongguoSearchPageTimeout)
 	defer cancel()
 	page, pageErr := downloader.fetchHongguoSearchPage(pageCtx, keyword)
@@ -113,16 +163,13 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 		return hongguoSearchEntry{}, errors.Join(pageErr, namesErr)
 	}
 	entry := hongguoSearchEntry{Dramas: make([]Drama, 0, len(page.Dramas)+len(names)), Total: page.Total, Limited: page.Limited}
-	positions := make(map[string]int)
 	for _, batch := range [][]Drama{page.Dramas, names} {
-		for _, drama := range batch {
-			if index, found := positions[drama.ID]; found {
-				entry.Dramas[index] = mergeDramaMetadata(entry.Dramas[index], drama)
-			} else {
-				positions[drama.ID] = len(entry.Dramas)
-				entry.Dramas = append(entry.Dramas, drama)
-			}
-		}
+		entry.Dramas = mergeHongguoSearchDramas(entry.Dramas, batch)
+	}
+	reportHongguoSearchProgress(ctx, entry)
+	seasonsLimited := downloader.completeHongguoSearchSeasons(ctx, keyword, &entry)
+	if err := ctx.Err(); err != nil {
+		return hongguoSearchEntry{}, err
 	}
 	query := hongguoSearchText(keyword)
 	sort.SliceStable(entry.Dramas, func(left, right int) bool {
@@ -133,11 +180,36 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 	} else if namesErr != nil {
 		entry.Warning = "红果名称检索暂不可用，结果可能缺少部分剧集，可重试"
 	}
-	entry.Limited = entry.Limited || pageErr != nil || namesErr != nil
+	if seasonsLimited {
+		if entry.Warning != "" {
+			entry.Warning += "；"
+		}
+		entry.Warning += "部分季数暂未补齐，已保留当前结果，可重试"
+	}
+	entry.Limited = entry.Limited || pageErr != nil || namesErr != nil || seasonsLimited
 	if entry.Total < len(entry.Dramas) {
 		entry.Total = len(entry.Dramas)
 	}
 	return entry, nil
+}
+
+func mergeHongguoSearchDramas(dramas, batch []Drama) []Drama {
+	positions := make(map[string]int, len(dramas)+len(batch))
+	for index, drama := range dramas {
+		positions[drama.ID] = index
+	}
+	for _, drama := range batch {
+		if drama.ID == "" {
+			continue
+		}
+		if index, found := positions[drama.ID]; found {
+			dramas[index] = mergeDramaMetadata(dramas[index], drama)
+		} else {
+			positions[drama.ID] = len(dramas)
+			dramas = append(dramas, drama)
+		}
+	}
+	return dramas
 }
 
 func (downloader *Downloader) fetchHongguoSearchNames(ctx context.Context, keyword string) ([]Drama, error) {

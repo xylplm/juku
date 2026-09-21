@@ -21,7 +21,7 @@ func isHongguoImageHost(host string) bool {
 
 func (app *UIApp) loadCoverImage(ctx context.Context, remoteURL string, decode func([]byte, string) []byte) ([]byte, error) {
 	source, _ := ctx.Value(coverSourceKey{}).(string)
-	referer := sourceCoverReferer(source, remoteURL)
+	referer := app.downloader.sourceCoverReferer(source, remoteURL)
 	return app.coverImages.load(ctx, remoteURL+"\x00"+referer, func(ctx context.Context) ([]byte, error) {
 		ctx = context.WithValue(ctx, coverRequestKey{}, true)
 		ctx = context.WithValue(ctx, coverSourceKey{}, source)

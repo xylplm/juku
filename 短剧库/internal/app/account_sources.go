@@ -248,17 +248,22 @@ func (app *UIApp) librarySnapshotForSourceLocked(ctx context.Context, revision u
 }
 
 func (app *UIApp) imageSource(ctx context.Context, remote string) (string, bool) {
+	source, _, allowed := app.imageTarget(ctx, "", remote)
+	return source, allowed
+}
+
+func (app *UIApp) imageTarget(ctx context.Context, id, remote string) (string, string, bool) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	for _, drama := range app.dramas {
-		if !dramaAllowed(ctx, drama.ID, drama.Source) {
+		if id != "" && drama.ID != id || !dramaAllowed(ctx, drama.ID, drama.Source) {
 			continue
 		}
-		if address, valid := buildImageURL(bestDramaCover(drama)); valid && address == remote {
-			return dramaProvider(drama), true
+		if address, valid := buildImageURL(bestDramaCover(drama)); valid && (id != "" || address == remote) {
+			return dramaProvider(drama), address, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func playbackSourceAllowed(ctx context.Context, session *playbackSession) bool {

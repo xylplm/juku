@@ -151,7 +151,7 @@ func TestCoverRefererPreservesHuangdouMirrors(t *testing.T) {
 		"https://xqjurgek.top/cover":           "https://xqjurgek.top/home",
 		"https://new-covers.example.org/cover": huangdouBaseURL + "/home",
 	} {
-		if referer := sourceCoverReferer(sourceHuangdou, address); referer != want {
+		if referer := (&Downloader{}).sourceCoverReferer(sourceHuangdou, address); referer != want {
 			t.Fatal(address, referer, want)
 		}
 	}

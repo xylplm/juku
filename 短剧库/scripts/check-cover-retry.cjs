@@ -10,8 +10,8 @@ const group = process.argv[4] || 'hongguo';
 const controlID = source + ':7000000000000000002';
 const origin = 'http://127.0.0.1:27831';
 const remote = 'https://covers.example.org/text-fixture?auth=a%2Fb%2B%3D&expires=1900000000';
-const cover = '/api/ui/image?url=' + encodeURIComponent(remote);
-const controlCover = '/api/ui/image?url=' + encodeURIComponent('https://covers.example.org/control-text');
+const cover = '/api/ui/image?url=' + encodeURIComponent(remote) + '&dramaId=' + encodeURIComponent(id);
+const controlCover = '/api/ui/image?url=' + encodeURIComponent('https://covers.example.org/control-text') + '&dramaId=' + encodeURIComponent(controlID);
 const ui = path.join(project, 'internal/webui');
 let dramas = [
   {id, source, title: '海报重试文字测试', cover, coverUrl: cover, totalEpisode: 3},
@@ -131,6 +131,7 @@ async function until(predicate, message) {
     for (const address of imageAttempts.filter(address => new URL(address).searchParams.has('_retry'))) {
       const target = new URL(address);
       assert.equal(target.searchParams.get('url'), remote, 'source signature changed');
+      assert.equal(target.searchParams.get('dramaId'), id, 'drama identity changed');
     }
     assert.deepEqual(unexpected, []);
     assert.deepEqual(pageErrors, []);

@@ -788,7 +788,11 @@ func normalizeDramaCover(drama *Drama) {
 	drama.OnlineDate = normalizeDate(drama.OnlineDate)
 	drama.Views = normalizeViews(drama.Views)
 	if p := bestDramaCover(*drama); p != "" {
-		drama.Cover = "/api/ui/image?url=" + url.QueryEscape(p)
+		address := "/api/ui/image?url=" + url.QueryEscape(p)
+		if drama.ID != "" {
+			address += "&dramaId=" + url.QueryEscape(drama.ID)
+		}
+		drama.Cover = address
 	}
 }
 
@@ -847,18 +851,28 @@ func (a *UIApp) handleImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid image url", http.StatusBadRequest)
 		return
 	}
-	source, allowed := a.imageSource(r.Context(), remoteURL)
-	if !allowed {
-		writeSourceDenied(w)
+	dramaID := strings.TrimSpace(r.URL.Query().Get("dramaId"))
+	if len(dramaID) > 512 {
+		http.Error(w, "invalid drama id", http.StatusBadRequest)
 		return
 	}
+	source, currentURL, allowed := a.imageTarget(r.Context(), dramaID, remoteURL)
+	if !allowed {
+		remote, _ := url.Parse(remoteURL)
+		message := "封面链接未登记、已更新或无站源权限，请重新打开剧集"
+		a.downloader.recordDiagnostic(diagnosticEvent{Event: "cover.denied", HTTPStatus: http.StatusForbidden, Host: remote.Hostname(), DramaID: dramaID, Message: message})
+		writeViewerError(w, http.StatusForbidden, "source_forbidden", message)
+		return
+	}
+	changed := currentURL != remoteURL
+	remoteURL = currentURL
 	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), coverSourceKey{}, source), 90*time.Second)
 	defer cancel()
 	buf, err := a.loadCoverImage(ctx, remoteURL, decodeImageBytes)
 	if err != nil {
 		if r.Context().Err() == nil {
 			remote, _ := url.Parse(remoteURL)
-			a.downloader.recordDiagnostic(diagnosticEvent{Event: "cover.failed", Host: remote.Hostname(), Message: a.redactError(err)})
+			a.downloader.recordDiagnostic(diagnosticEvent{Event: "cover.failed", HTTPStatus: http.StatusBadGateway, Source: source, DramaID: dramaID, Host: remote.Hostname(), Message: a.redactError(err)})
 		}
 		http.Error(w, a.redactError(err), http.StatusBadGateway)
 		return
@@ -866,7 +880,7 @@ func (a *UIApp) handleImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", imageContentType(buf))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	if sourceScopeRestricted(r.Context()) {
+	if changed || sourceScopeRestricted(r.Context()) {
 		w.Header().Set("Cache-Control", "private, no-store")
 	}
 	w.WriteHeader(http.StatusOK)
@@ -899,7 +913,7 @@ func isHuangguoImageCDNHost(host string) bool {
 	return host == "pic.tuafjz.cn" || strings.HasSuffix(host, ".zdmhyg.cn")
 }
 
-func sourceCoverReferer(source, remoteURL string) string {
+func (d *Downloader) sourceCoverReferer(source, remoteURL string) string {
 	switch source {
 	case sourceHongguo:
 		return hongguoBaseURL + "/"
@@ -914,7 +928,7 @@ func sourceCoverReferer(source, remoteURL string) string {
 				return remote.Scheme + "://" + remote.Host + "/home"
 			}
 		}
-		return huangdouBaseURL + "/home"
+		return d.huangdouRequestBaseURL() + "/home"
 	}
 	return imageReferer(remoteURL)
 }

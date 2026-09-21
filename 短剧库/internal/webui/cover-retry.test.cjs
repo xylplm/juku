@@ -8,7 +8,8 @@ const modulePromise = import('data:text/javascript;base64,' + Buffer.from(source
 test('cover retries preserve the exact signed upstream URL and use fresh local requests', async () => {
   const {retryCoverURL} = await modulePromise;
   const upstream = 'https://covers.example.org/text-fixture.jpg?auth=a%2Fb%2B%3D&expires=1900000000&name=a+b';
-  const canonical = '/api/ui/image?url=' + encodeURIComponent(upstream);
+  const id = 'hongguo:7000000000000000001';
+  const canonical = '/api/ui/image?url=' + encodeURIComponent(upstream) + '&dramaId=' + encodeURIComponent(id);
   const requests = Array.from({length: 20}, () => retryCoverURL(canonical));
   assert.equal(new Set(requests).size, requests.length);
   for (const address of requests) {
@@ -16,6 +17,7 @@ test('cover retries preserve the exact signed upstream URL and use fresh local r
     const target = new URL(address, 'http://localhost');
     assert.equal(target.pathname, '/api/ui/image');
     assert.equal(target.searchParams.get('url'), upstream);
+    assert.equal(target.searchParams.get('dramaId'), id);
     assert.equal(target.searchParams.getAll('_retry').length, 1);
   }
 });

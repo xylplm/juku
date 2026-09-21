@@ -67,7 +67,7 @@ func (a *UIApp) handleCoverRepair(w http.ResponseWriter, r *http.Request) {
 func currentCoverResult(drama Drama) coverRepairResult {
 	result := coverRepairResult{DramaID: drama.ID, RetryAfter: int(coverRepairRetryDelay.Seconds())}
 	if address, ok := buildImageURL(bestDramaCover(drama)); ok {
-		patch := Drama{CoverURL: address}
+		patch := Drama{ID: drama.ID, CoverURL: address}
 		normalizeDramaCover(&patch)
 		result.Cover, _ = patch.Cover.(string)
 	}
@@ -134,7 +134,7 @@ func (a *UIApp) repairDramaCover(ctx context.Context, drama Drama, observed stri
 				continue
 			}
 			if bestDramaCover(current) == previous {
-				patch := Drama{CoverURL: address}
+				patch := Drama{ID: current.ID, CoverURL: address}
 				normalizeDramaCover(&patch)
 				current.CoverURL, current.Cover = address, patch.Cover
 				changed = bestDramaCover(current) != previous

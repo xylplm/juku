@@ -28,6 +28,7 @@ func TestSearchCompletenessBrowserFixture(t *testing.T) {
 	a.statePath = filepath.Join(a.cfg.dataDirectory(), "ui-state.json")
 	a.cfg.adminUsername, a.cfg.adminPassword, a.cfg.adminPasswordExplicit = "admin", accountFixturePassword, true
 	page, names := hongguoSearchCompletenessFixtures()
+	seasons := hongguoManySeasonFixtures()
 	loader := routerLoaderMap(parseRouterData(page), "search_(keyword)/page")
 	for _, row := range anyList(loader["searchList"]) {
 		a.dramas = append(a.dramas, hongguoDramaFromAny(row, "短剧"))
@@ -42,6 +43,16 @@ func TestSearchCompletenessBrowserFixture(t *testing.T) {
 		}
 		query := r.URL.Query().Get("query")
 		if r.URL.Path == "/incent_resource/suggestion" {
+			if body, found := seasons[query]; found && query != "page" {
+				if query != hongguoManySeasonQuery {
+					select {
+					case <-time.After(300 * time.Millisecond):
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					}
+				}
+				return rankingHTTPResponse(r, 200, body), nil
+			}
 			if query == "慢搜索" {
 				select {
 				case <-time.After(time.Second):
@@ -59,6 +70,9 @@ func TestSearchCompletenessBrowserFixture(t *testing.T) {
 		}
 		if strings.HasPrefix(r.URL.Path, "/search/") {
 			query = strings.TrimPrefix(r.URL.Path, "/search/")
+			if query == hongguoManySeasonQuery {
+				return rankingHTTPResponse(r, 200, seasons["page"]), nil
+			}
 			if query == "综合故障" || query == "全部故障" {
 				return rankingHTTPResponse(r, 200, `{}`), nil
 			}

@@ -40,13 +40,17 @@ func newHuangdouAPIClient(d *Downloader) *huangdouAPIClient {
 	if id == "" {
 		id = strconv.FormatInt(time.Now().UnixNano(), 16)
 	}
+	return &huangdouAPIClient{d: d, host: d.huangdouRequestBaseURL(), sessionID: id, deviceID: id}
+}
+
+func (d *Downloader) huangdouRequestBaseURL() string {
 	host := d.providerBaseURL(sourceHuangdou)
 	d.providerMu.Lock()
 	if preferred := d.providerHosts[sourceHuangdou]; preferred != "" {
 		host = preferred
 	}
 	d.providerMu.Unlock()
-	return &huangdouAPIClient{d: d, host: host, sessionID: id, deviceID: id}
+	return host
 }
 
 func (d *Downloader) fetchHuangdouDramas(ctx context.Context) ([]Drama, error) {
@@ -335,19 +339,15 @@ func huangdouKey(rid string) ([]byte, error) {
 }
 
 func huangdouDecode(blob, key []byte) (any, error) {
+	var direct any
+	if err := json.Unmarshal(blob, &direct); err == nil {
+		return direct, nil
+	}
 	if len(blob) < aes.BlockSize*2 {
-		var direct any
-		if err := json.Unmarshal(blob, &direct); err == nil {
-			return direct, nil
-		}
 		return nil, fmt.Errorf("huangdou response too short")
 	}
 	plain, err := aesCBCDecrypt(blob[aes.BlockSize:], key, blob[:aes.BlockSize])
 	if err != nil {
-		var direct any
-		if jsonErr := json.Unmarshal(blob, &direct); jsonErr == nil {
-			return direct, nil
-		}
 		return nil, err
 	}
 	if len(plain) >= 2 && plain[0] == 0x1f && plain[1] == 0x8b {

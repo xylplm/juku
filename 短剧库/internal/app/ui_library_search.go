@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"time"
 )
 
@@ -44,6 +45,10 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 	if !requireSource(writer, request.Context(), sourceHongguo) {
 		return
 	}
+	if request.URL.Query().Get("stream") == "1" {
+		app.handleLibrarySearchStream(writer, request, keyword)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
 	defer cancel()
 	result, err := app.downloader.searchHongguoDramas(ctx, keyword)
@@ -58,7 +63,21 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 	if ctx.Err() != nil {
 		return
 	}
-	dramas := append([]Drama{}, result.Dramas...)
+	dramas := app.importLibrarySearchDramas(result.Dramas)
+	if len(dramas) > 0 {
+		app.persistLibrary()
+	}
+	app.mu.Lock()
+	saved := app.librarySaved && !app.libraryDirty
+	app.mu.Unlock()
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"query": keyword, "source": sourceHongguo, "data": dramas, "total": result.Total,
+		"limited": result.Limited, "warning": result.Warning, "saved": saved,
+	})
+}
+
+func (app *UIApp) importLibrarySearchDramas(items []Drama) []Drama {
+	dramas := append([]Drama{}, items...)
 	if len(dramas) > 0 {
 		positions := make(map[string]int, len(dramas))
 		for index, drama := range dramas {
@@ -66,6 +85,25 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 		}
 		app.mu.Lock()
 		app.normalizeDramaCovers(dramas)
+		known := make(map[string]Drama, len(dramas))
+		for _, drama := range app.dramas {
+			if _, found := positions[drama.ID]; found {
+				known[drama.ID] = drama
+			}
+		}
+		changed := app.librarySources[sourceHongguo].Status == ""
+		for index, drama := range dramas {
+			previous, found := known[drama.ID]
+			if found {
+				drama = mergeDramaMetadata(drama, previous)
+			}
+			changed = changed || !found || !reflect.DeepEqual(drama, previous)
+			dramas[index] = drama
+		}
+		if !changed {
+			app.mu.Unlock()
+			return dramas
+		}
 		newDramas := app.newSortMetadataDramasLocked(dramas)
 		app.dramas = mergeSourceDramas(app.dramas, dramas, nil, sourceHongguo)
 		app.enqueueSortMetadataLocked(newDramas, false)
@@ -92,13 +130,6 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 		app.libraryDirty = true
 		app.libraryRevision++
 		app.mu.Unlock()
-		app.persistLibrary()
 	}
-	app.mu.Lock()
-	saved := app.librarySaved && !app.libraryDirty
-	app.mu.Unlock()
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"query": keyword, "source": sourceHongguo, "data": dramas, "total": result.Total,
-		"limited": result.Limited, "warning": result.Warning, "saved": saved,
-	})
+	return dramas
 }

@@ -30,7 +30,7 @@ func TestHongguoRankingKeepsCoverAddressForLibrary(t *testing.T) {
 	page.BoardID, page.Page, page.FetchedAt = board.ID, 1, time.Now()
 	app.acceptRankingDramas(page)
 	for _, drama := range app.dramas {
-		if drama.ID == page.Items[0].Drama.ID && drama.Cover != "/api/ui/image?url="+url.QueryEscape(coverAddressFixture) {
+		if drama.ID == page.Items[0].Drama.ID && drama.Cover != "/api/ui/image?url="+url.QueryEscape(coverAddressFixture)+"&dramaId="+url.QueryEscape(drama.ID) {
 			t.Fatal("ranking address bypassed the local cover route")
 		}
 	}
