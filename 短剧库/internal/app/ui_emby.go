@@ -74,7 +74,7 @@ func embyToken(key []byte, dramaID, chapterID string, accounts ...string) string
 
 func validEmbyIdentity(dramaID, chapterID string) bool {
 	canonical, _, ok := playbackHistoryIdentity(dramaID)
-	return ok && canonical == dramaID && len(dramaID) <= 256 && chapterID != "" && len(chapterID) <= 512 && !strings.ContainsAny(chapterID, "\x00\r\n")
+	return ok && canonical == dramaID && len(dramaID) <= 512 && chapterID != "" && len(chapterID) <= 1024 && !strings.ContainsAny(chapterID, "\x00\r\n")
 }
 
 func (app *UIApp) authorizeEmby(writer http.ResponseWriter, request *http.Request) (string, string, bool) {

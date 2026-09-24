@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,6 +14,7 @@ import (
 const sortMetadataVersion = 1
 const sortMetadataBatchSize = 40
 const sortMetadataRetryDelay = 5 * time.Minute
+const sortMetadataMissingRetryDelay = 24 * time.Hour
 
 type sortMetadataState struct {
 	VIPChecked   bool      `json:"vipChecked,omitempty"`
@@ -19,6 +22,8 @@ type sortMetadataState struct {
 	CheckedAt    time.Time `json:"checkedAt"`
 	Pending      bool      `json:"pending,omitempty"`
 	CoverChecked bool      `json:"coverChecked,omitempty"`
+	RetryAt      time.Time `json:"retryAt,omitempty"`
+	LastError    string    `json:"lastError,omitempty"`
 }
 
 type libraryRowsKey struct{}
@@ -35,7 +40,7 @@ type libraryMetadataProgress struct {
 
 func supportsSortMetadata(drama Drama) bool {
 	switch dramaProvider(drama) {
-	case sourceHongguo, sourceHuangdou, sourceHuangguoAI, sourceHuangguoVideo:
+	case sourceHongguo, sourceHuangdou, sourceHuangguoAI, sourceHuangguoVideo, sourceHuangju, sourceYeguo, sourceDSD:
 		return true
 	}
 	return false
@@ -43,6 +48,40 @@ func supportsSortMetadata(drama Drama) bool {
 
 func needsSortMetadata(drama Drama) bool {
 	return supportsSortMetadata(drama) && (drama.SortMetadata == nil || drama.SortMetadata.Version != dramaSortMetadataVersion(drama) || needsHongguoCoverAddress(drama) || needsHuangdouVIPMetadata(drama))
+}
+
+func sortMetadataRetryAt(state *sortMetadataState, now time.Time) time.Time {
+	if state == nil || state.Version != 0 {
+		return time.Time{}
+	}
+	if !state.RetryAt.IsZero() {
+		return state.RetryAt
+	}
+	if state.CheckedAt.IsZero() {
+		return time.Time{}
+	}
+	return state.CheckedAt.Add(sortMetadataRetryDelay)
+}
+
+func sortMetadataFailureDelay(err error) time.Duration {
+	var status *httpStatusError
+	if errors.As(err, &status) && (status.status == http.StatusNotFound || status.status == http.StatusGone) {
+		return sortMetadataMissingRetryDelay
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "无效的") || strings.Contains(text, "未返回所请求") || strings.Contains(text, "返回了其他剧集") || strings.Contains(text, "与请求剧集不符") {
+		return sortMetadataMissingRetryDelay
+	}
+	return sortMetadataRetryDelay
+}
+
+func failedSortMetadataState(drama Drama, err error, now time.Time) *sortMetadataState {
+	state := &sortMetadataState{CheckedAt: now, RetryAt: now.Add(sortMetadataFailureDelay(err)), LastError: truncate(publicError(err).Error(), 300)}
+	if drama.SortMetadata != nil {
+		state.VIPChecked = drama.SortMetadata.VIPChecked
+		state.CoverChecked = drama.SortMetadata.CoverChecked
+	}
+	return state
 }
 
 func needsHongguoCoverAddress(drama Drama) bool {
@@ -71,7 +110,7 @@ func selectSortMetadataBatch(dramas []Drama, source string, priority []string, n
 			continue
 		}
 		seen[drama.ID] = true
-		if drama.SortMetadata != nil && drama.SortMetadata.Version == 0 && now.Sub(drama.SortMetadata.CheckedAt) < sortMetadataRetryDelay {
+		if retryAt := sortMetadataRetryAt(drama.SortMetadata, now); !retryAt.IsZero() && now.Before(retryAt) {
 			continue
 		}
 		candidates = append(candidates, drama)
@@ -124,8 +163,14 @@ func reportMetadataProgress(ctx context.Context, progress libraryMetadataProgres
 
 func (d *Downloader) backfillSortMetadata(ctx context.Context, source string) ([]Drama, map[string]error) {
 	rows, _ := ctx.Value(libraryRowsKey{}).([]Drama)
+	allowed := make([]Drama, 0, len(rows))
+	for _, drama := range rows {
+		if dramaAllowed(ctx, drama.ID, drama.Source) {
+			allowed = append(allowed, drama)
+		}
+	}
 	priority, _ := ctx.Value(libraryPriorityKey{}).([]string)
-	batch := selectSortMetadataBatch(rows, source, priority, time.Now())
+	batch := selectSortMetadataBatch(allowed, source, priority, time.Now())
 	progress := libraryMetadataProgress{Running: true, Total: len(batch)}
 	reportMetadataProgress(ctx, progress)
 	defer func() { progress.Running = false; reportMetadataProgress(ctx, progress) }()
@@ -165,11 +210,14 @@ func (d *Downloader) backfillSortMetadata(ctx context.Context, source string) ([
 				itemCtx, stop := context.WithTimeout(workCtx, 40*time.Second)
 				patch, err := d.fetchDramaSortMetadata(itemCtx, drama)
 				stop()
-				patch.SortMetadata = &sortMetadataState{CheckedAt: time.Now()}
+				now := time.Now()
+				patch.SortMetadata = &sortMetadataState{CheckedAt: now}
 				if err == nil {
 					patch.SortMetadata.Version = dramaSortMetadataVersion(drama)
 					patch.SortMetadata.CoverChecked = dramaProvider(drama) == sourceHongguo
 					patch.SortMetadata.VIPChecked = dramaProvider(drama) == sourceHuangdou
+				} else {
+					patch.SortMetadata = failedSortMetadataState(drama, err, now)
 				}
 				results <- result{patch: patch, previous: drama, err: err}
 			}
@@ -206,17 +254,30 @@ func (d *Downloader) backfillSortMetadata(ctx context.Context, source string) ([
 }
 
 func (d *Downloader) fetchMoreLibrary(ctx context.Context, source string) ([]Drama, error) {
-	patches, failures := d.backfillSortMetadata(ctx, source)
-	if matchesSourceFilter(sourceHongguo, source) {
-		items, err := d.fetchHongguoDramas(ctx)
+	category, _ := ctx.Value(libraryCategoryKey{}).(string)
+	var patches []Drama
+	failures := map[string]error{}
+	if matchesSourceFilter(sourceHongguo, source) && sourceAllowed(ctx, sourceHongguo) {
+		items, err := d.fetchHongguoCategoryDramas(ctx, category)
 		if err != nil {
 			failures[sourceHongguo] = errors.Join(failures[sourceHongguo], err)
 		}
 		reportLibraryProgress(ctx, sourceHongguo, items, failures[sourceHongguo], true)
 		patches = mergeSourceDramas(patches, items, nil, sourceHongguo)
 	}
+	for _, provider := range []string{sourceHuangju, sourceYeguo, sourceDSD} {
+		if !matchesSourceFilter(provider, source) || !sourceAllowed(ctx, provider) {
+			continue
+		}
+		items, err := d.fetchPagedProviderDramas(ctx, provider, category)
+		if err != nil {
+			failures[provider] = errors.Join(failures[provider], err)
+		}
+		reportLibraryProgress(ctx, provider, items, failures[provider], true)
+		patches = mergeSourceDramas(patches, items, nil, provider)
+	}
 	for _, provider := range []string{"cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou} {
-		if matchesSourceFilter(provider, source) {
+		if matchesSourceFilter(provider, source) && sourceAllowed(ctx, provider) {
 			reportLibraryProgress(ctx, provider, nil, failures[provider], true)
 		}
 	}

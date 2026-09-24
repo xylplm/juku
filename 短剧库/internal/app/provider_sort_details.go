@@ -71,6 +71,9 @@ func (d *Downloader) fetchDramaSortMetadata(ctx context.Context, drama Drama) (D
 		return patch, nil
 	}
 	switch source {
+	case sourceHuangju, sourceYeguo, sourceDSD:
+		fresh, _, err := d.fetchProviderDetail(ctx, source, id)
+		return mergeDramaMetadata(fresh, patch), err
 	case sourceHongguo:
 		if !hongguoNumericID.MatchString(id) {
 			return patch, errors.New("无效的红果剧集 ID")

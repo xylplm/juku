@@ -19,30 +19,32 @@ type networkCheckResult struct {
 }
 
 func (a *UIApp) networkCheckResults(ctx context.Context) []networkCheckResult {
-	targets := []struct{ name, endpoint string }{
-		{"黄豆入口", a.downloader.providerBaseURL(sourceHuangdou) + "/home"},
-		{"红果入口", a.downloader.providerBaseURL(sourceHongguo) + "/"},
-		{"黄果 AI 入口", a.downloader.providerBaseURL(sourceHuangguoAI) + "/"},
-		{"黄果 video 入口", a.downloader.providerBaseURL(sourceHuangguoVideo) + "/videos"},
+	targets := []struct{ name, endpoint, source string }{
+		{"黄豆入口", a.downloader.providerBaseURL(sourceHuangdou) + "/home", sourceHuangdou},
+		{"红果入口", a.downloader.providerBaseURL(sourceHongguo) + "/", sourceHongguo},
+		{"黄果 AI 入口", a.downloader.providerBaseURL(sourceHuangguoAI) + "/", sourceHuangguoAI},
+		{"黄果 video 入口", a.downloader.providerBaseURL(sourceHuangguoVideo) + "/videos", sourceHuangguoVideo},
+		{"剧果目录", "", sourceHuangju},
+		{"野果目录", "", sourceYeguo},
+		{"帝果目录", "", sourceDSD},
 	}
+	allowed := targets[:0]
+	for _, target := range targets {
+		if sourceAllowed(ctx, target.source) {
+			allowed = append(allowed, target)
+		}
+	}
+	targets = allowed
 	var mediaTask *Task
 	a.mu.Lock()
 	concurrency := a.cfg.RequestConcurrency
-	for _, drama := range a.dramas {
-		if dramaProvider(drama) == sourceHuangdou {
-			if endpoint, valid := buildImageURL(bestDramaCover(drama)); valid {
-				targets = append(targets, struct{ name, endpoint string }{"黄豆封面 CDN", endpoint})
-				break
-			}
-		}
-	}
 	for index := len(a.taskOrder) - 1; index >= 0; index-- {
 		task := a.tasks[a.taskOrder[index]]
 		if task == nil || isChapterPlaceholderTask(task) {
 			continue
 		}
 		source := sourceFromDramaID(task.DramaID)
-		if source == sourceHuangguoAI || source == sourceHuangguoVideo {
+		if (source == sourceHuangguoAI || source == sourceHuangguoVideo) && sourceAllowed(ctx, source) {
 			copy := task.Source
 			mediaTask = &copy
 			if task.Status == uiStatusFailed {
@@ -71,6 +73,17 @@ func (a *UIApp) networkCheckResults(ctx context.Context) []networkCheckResult {
 				}
 				target := targets[index]
 				probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if paginatedProvider(target.source) {
+					rows, _, err := a.downloader.fetchProviderCatalogPage(probeCtx, target.source, 1, "", "")
+					result := networkCheckResult{Name: target.name, Error: a.redactError(err)}
+					if err == nil {
+						result.Status = http.StatusOK
+						result.Detail = fmt.Sprintf("目录返回 %d 部剧；播放仍需单独验证", len(rows))
+					}
+					results[index] = result
+					cancel()
+					continue
+				}
 				if providerSourceForURL(target.endpoint) == sourceHuangguoVideo || target.name == "黄果 video 入口" {
 					body, err := a.downloader.fetchProviderText(probeCtx, target.endpoint, a.downloader.providerBaseURL(sourceHuangguoVideo)+"/")
 					result := networkCheckResult{Name: target.name, Error: a.redactError(err)}
@@ -107,7 +120,12 @@ func (a *UIApp) checkNetworkResource(ctx context.Context, method, endpoint, refe
 	}
 	upstream.Header.Set("User-Agent", userAgent)
 	upstream.Header.Set("Referer", referer)
-	response, err := a.downloader.client.Do(upstream)
+	var response *http.Response
+	if key || method == http.MethodHead {
+		response, err = a.downloader.doMediaRequest(upstream)
+	} else {
+		response, err = a.downloader.doCatalogRequest(upstream)
+	}
 	if err != nil {
 		return 0, publicError(err)
 	}
@@ -149,7 +167,7 @@ func (a *UIApp) checkHuangguoMedia(ctx context.Context, task *Task) networkCheck
 		if variant == "" {
 			break
 		}
-		media.Playlist, media.URL, err = a.downloader.fetchProviderTextURL(ctx, variant, media.Referer)
+		media.Playlist, media.URL, err = a.downloader.fetchMediaPlaylist(ctx, variant, media.Referer)
 		if err != nil {
 			result.Error = "播放列表失败: " + a.redactError(err)
 			return result

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,6 +34,10 @@ var rankingBoards = []rankingBoard{
 	{ID: "huangguo-hot", Source: "huangguo", Name: "热播榜", Description: "黄果站点热播 TOP 20；每日更新。", path: "hot"},
 	{ID: "huangguo-recommend", Source: "huangguo", Name: "推荐榜", Description: "黄果站点推荐 TOP 20。", path: "recommend"},
 	{ID: "huangguo-potential", Source: "huangguo", Name: "潜力榜", Description: "黄果站点潜力 TOP 20。", path: "potential"},
+	{ID: "huangju-hot", Source: sourceHuangju, Name: "热门榜", Description: "剧果目录热门顺序，按源站返回顺序展示。"},
+	{ID: "huangju-new", Source: sourceHuangju, Name: "最新榜", Description: "剧果最新目录顺序，按源站返回顺序展示。", path: huangjuNewestCategory},
+	{ID: "yeguo-recommend", Source: sourceYeguo, Name: "目录榜", Description: "野果默认目录顺序，按源站返回顺序展示。"},
+	{ID: "dsd-catalog", Source: sourceDSD, Name: "目录榜", Description: "帝果分类目录聚合顺序，按源站返回顺序展示。"},
 }
 
 type rankingItem struct {
@@ -63,6 +68,7 @@ type rankingCache struct {
 	mu      sync.Mutex
 	pages   map[string]rankingPage
 	pending map[string]*rankingCall
+	loaded  bool
 }
 
 func findRankingBoard(id string) (rankingBoard, bool) {
@@ -74,21 +80,30 @@ func findRankingBoard(id string) (rankingBoard, bool) {
 	return rankingBoard{}, false
 }
 
+func singlePageRankingBoard(board rankingBoard) bool {
+	return board.Source == "huangguo" || board.Source == sourceDSD
+}
+
 func cloneRankingPage(page rankingPage) rankingPage {
 	page.Items = append([]rankingItem{}, page.Items...)
 	return page
+}
+
+func rankingDramaWithoutImages(drama Drama) Drama {
+	drama.Cover, drama.CoverURL, drama.CoverURLSnake = nil, nil, nil
+	drama.Image, drama.ImageURL, drama.ImageURLSnake = nil, nil, nil
+	drama.Img, drama.Pic, drama.Picture = nil, nil, nil
+	drama.Poster, drama.Thumb, drama.Thumbnail = nil, nil, nil
+	return drama
 }
 
 func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, page int, refresh bool) (rankingPage, error) {
 	key := board.ID + ":" + strconv.Itoa(page)
 	cache := &d.rankings
 	cache.mu.Lock()
-	if cache.pages == nil {
-		cache.pages = map[string]rankingPage{}
-		cache.pending = map[string]*rankingCall{}
-	}
+	d.restoreRankingCacheLocked(cache)
 	cached, exists := cache.pages[key]
-	if exists && !refresh && time.Since(cached.FetchedAt) < rankingCacheTTL {
+	if exists && !refresh && time.Since(cached.FetchedAt) >= 0 && time.Since(cached.FetchedAt) < rankingCacheTTL {
 		cache.mu.Unlock()
 		return cloneRankingPage(cached), nil
 	}
@@ -130,7 +145,8 @@ func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, pa
 			delete(cache.pages, oldestKey)
 		}
 		cache.pages[key] = cloneRankingPage(result)
-	} else if exists && ctx.Err() == nil && time.Since(cached.FetchedAt) < 24*time.Hour {
+		d.saveRankingCacheLocked(cache)
+	} else if exists && ctx.Err() == nil && time.Since(cached.FetchedAt) >= 0 && time.Since(cached.FetchedAt) < 24*time.Hour {
 		result = cloneRankingPage(cached)
 		result.Stale = true
 		result.Warning = "站点暂不可用，显示上次取得的榜单，请稍后刷新。"
@@ -145,12 +161,7 @@ func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, pa
 func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, page int) (rankingPage, error) {
 	switch board.Source {
 	case sourceHongguo:
-		pageURL := hongguoBaseURL + "/rank/" + board.path + "?page=" + strconv.Itoa(page)
-		body, err := d.fetchProviderText(ctx, pageURL, hongguoBaseURL+"/")
-		if err != nil {
-			return rankingPage{}, err
-		}
-		return parseHongguoRanking(body, board, page)
+		return d.fetchHongguoRankingPage(ctx, board, page)
 	case sourceHuangdou:
 		var decoded any
 		err := newHuangdouAPIClient(d).call(ctx, "/drama/rank", map[string]any{"tab": board.upstreamKey, "page": strconv.Itoa(page)}, &decoded)
@@ -168,7 +179,41 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 			return rankingPage{}, err
 		}
 		return parseHuangguoRanking(body, board)
+	case sourceHuangju, sourceYeguo, sourceDSD:
+		return d.fetchCatalogRankingPage(ctx, board, page)
 	default:
 		return rankingPage{}, fmt.Errorf("不支持的榜单站源 %s", board.Source)
 	}
+}
+
+func (d *Downloader) fetchCatalogRankingPage(ctx context.Context, board rankingBoard, page int) (rankingPage, error) {
+	if singlePageRankingBoard(board) && page != 1 {
+		return rankingPage{}, errors.New("该榜单只有一页")
+	}
+	category := board.path
+	if board.Source == sourceYeguo && category == "recommend" {
+		category = ""
+		categories, err := d.fetchYeguoCategories(ctx)
+		if err == nil {
+			for _, item := range categories {
+				if strings.HasPrefix(item.ID, "recommend:") {
+					category = item.ID
+					break
+				}
+			}
+		}
+	}
+	items, more, err := d.fetchProviderCatalogPage(ctx, board.Source, page, category, "")
+	if err != nil {
+		return rankingPage{}, err
+	}
+	if board.Source == sourceDSD {
+		more = false
+	}
+	result := rankingPage{Items: make([]rankingItem, 0, len(items)), HasMore: more}
+	stride := 20
+	for index, drama := range items {
+		result.Items = append(result.Items, rankingItem{Rank: (page-1)*stride + index + 1, Drama: rankingDramaWithoutImages(drama)})
+	}
+	return result, nil
 }

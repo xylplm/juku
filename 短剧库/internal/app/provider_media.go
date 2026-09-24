@@ -10,14 +10,15 @@ import (
 )
 
 type providerMedia struct {
-	URL      string
-	Referer  string
-	Duration time.Duration
-	Playlist string
-	HLSKey   []byte
-	CENCKey  []byte
-	Quality  int
-	Variants []providerMedia
+	credentials *providerMediaCredentials
+	URL         string
+	Referer     string
+	Duration    time.Duration
+	Playlist    string
+	HLSKey      []byte
+	CENCKey     []byte
+	Quality     int
+	Variants    []providerMedia
 }
 
 func (d *Downloader) providerBaseURL(source string) string {
@@ -32,6 +33,12 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.HuangdouURL, huangdouBaseURL
 	case sourceHongguo:
 		configured, fallback = d.cfg.HongguoURL, hongguoBaseURL
+	case sourceHuangju:
+		configured, fallback = d.cfg.HuangjuURL, huangjuBaseURL
+	case sourceYeguo:
+		configured, fallback = d.cfg.YeguoURL, yeguoBaseURL
+	case sourceDSD:
+		configured, fallback = d.cfg.DSDURL, dsdBaseURL
 	default:
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -53,6 +60,18 @@ func providerSourceForURL(raw string) string {
 		return sourceHuangdou
 	case host == "hongguoduanju.com" || host == "www.hongguoduanju.com":
 		return sourceHongguo
+	case host == "huangju.net" || host == "www.huangju.net" || host == "api.huangju.net" ||
+		host == "yanyushorttv.cc" || host == "www.yanyushorttv.cc" || host == "api.yanyushorttv.cc" ||
+		host == "yanyushorttv.top" || host == "www.yanyushorttv.top" || host == "api.yanyushorttv.top" ||
+		strings.HasSuffix(host, ".yanyushorttv.cc") || strings.HasSuffix(host, ".yanyushorttv.top"):
+		return sourceHuangju
+	case host == "delta.ygrwdsgt.cc" || host == "ygdj7.com" || host == "www.ygdj7.com" ||
+		host == "yeguodj.com" || host == "www.yeguodj.com" ||
+		strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") ||
+		strings.HasSuffix(host, ".ocdjlxow.cc"):
+		return sourceYeguo
+	case host == "dsd.com.se" || host == "www.dsd.com.se":
+		return sourceDSD
 	default:
 		return ""
 	}
@@ -60,7 +79,7 @@ func providerSourceForURL(raw string) string {
 
 func (d *Downloader) providerURLCandidates(raw string) []string {
 	source := providerSourceForURL(raw)
-	if source == "" {
+	if source == "" || source == sourceHuangju || source == sourceYeguo {
 		return []string{raw}
 	}
 	parsed, _ := url.Parse(raw)
@@ -92,6 +111,14 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	chapter.Source = canonicalProviderSource(chapter.Source)
 	if chapter.Source == "" {
 		chapter.Source = sourceFromDramaID(task.DramaID)
+	}
+	switch chapter.Source {
+	case sourceHuangju:
+		return d.resolveHuangjuMedia(ctx, task)
+	case sourceYeguo:
+		return d.resolveYeguoMedia(ctx, task)
+	case sourceDSD:
+		return d.resolveDSDMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)
@@ -141,28 +168,18 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 		} else {
 			media.URL = parseDataHLS(body, pageURL)
 		}
-		d.providerMu.Lock()
-		if preferred := d.providerHosts[chapter.Source]; preferred != "" {
-			media.Referer = preferred + "/"
-		}
-		d.providerMu.Unlock()
+		media.Referer = pageURL
 	}
 	if !isProviderHTTPMediaURL(media.URL) {
 		return providerMedia{}, fmt.Errorf("%s 未返回有效播放地址，请刷新章节或确认站点访问权限", chapter.Source)
 	}
 	parsed, _ := url.Parse(media.URL)
 	if strings.HasSuffix(strings.ToLower(parsed.Path), ".m3u8") {
-		playlist, finalURL, err := d.fetchProviderTextURL(ctx, media.URL, media.Referer)
+		selected, err := d.fetchMediaPlaylistForMedia(ctx, media)
 		if err != nil {
 			return providerMedia{}, fmt.Errorf("获取播放列表失败: %w", err)
 		}
-		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(playlist, "\ufeff")), "#EXTM3U") {
-			return providerMedia{}, fmt.Errorf("站点未返回有效 M3U8，可能需要登录或链接已失效")
-		}
-		if duration := m3u8Duration(playlist); duration > 0 {
-			media.Duration = duration
-		}
-		media.Playlist, media.URL = playlist, finalURL
+		media = selected
 	}
 	return media, nil
 }

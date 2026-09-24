@@ -89,7 +89,7 @@ func (app *UIApp) handleEmbyCover(writer http.ResponseWriter, request *http.Requ
 	supplied, err := hex.DecodeString(query.Get("key"))
 	versionBytes, versionErr := hex.DecodeString(version)
 	key, keyErr := app.embySigningKey(false)
-	if !valid || id != canonical || len(id) > 256 || len(owner) > 256 || strings.ContainsAny(owner, "\x00\r\n") ||
+	if !valid || id != canonical || len(id) > 512 || len(owner) > 256 || strings.ContainsAny(owner, "\x00\r\n") ||
 		err != nil || len(supplied) != 32 || versionErr != nil || len(versionBytes) != 16 || keyErr != nil {
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "Emby 海报链接无效，请重新同步或导出"})
 		return

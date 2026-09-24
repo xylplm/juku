@@ -248,6 +248,9 @@ func (d *Downloader) legacyRequest(ctx context.Context, method, apiPath string, 
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 				return nil, lastErr
 			}
+			if resp.StatusCode >= 500 {
+				d.resetAPIEndpoint(base)
+			}
 			continue
 		}
 		var env apiEnvelope
@@ -301,6 +304,7 @@ func (d *Downloader) fetchCloudFrontDramas(ctx context.Context) ([]Drama, error)
 			if tab.ID == "" {
 				continue
 			}
+			previousSignature := ""
 			for page := 1; page <= d.cfg.MaxPagesPerSort; page++ {
 				if err := ctx.Err(); err != nil {
 					return unique, err
@@ -320,7 +324,6 @@ func (d *Downloader) fetchCloudFrontDramas(ctx context.Context) ([]Drama, error)
 				if len(lr.List) == 0 {
 					break
 				}
-				added := 0
 				var batch []Drama
 				for _, item := range lr.List {
 					if item.ID == "" || seen[item.ID] {
@@ -332,12 +335,19 @@ func (d *Downloader) fetchCloudFrontDramas(ctx context.Context) ([]Drama, error)
 					seen[item.ID] = true
 					unique = append(unique, item)
 					batch = append(batch, item)
-					added++
 				}
 				reportLibraryProgress(ctx, "cloudfront", batch, nil, false)
-				if added == 0 || len(lr.List) < d.cfg.PageSize {
+				ids := make([]string, 0, len(lr.List))
+				for _, item := range lr.List {
+					if item.ID != "" {
+						ids = append(ids, item.ID)
+					}
+				}
+				signature := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(ids, "\n"))))
+				if signature == previousSignature {
 					break
 				}
+				previousSignature = signature
 			}
 		}
 	}

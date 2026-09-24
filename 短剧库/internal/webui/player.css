@@ -20,6 +20,8 @@
 .mobile-only,.landscape-only,.player-sheet-backdrop{display:none}
 .player-episode-list .vip-episode{color:#a97920}
 .player-dialog.mobile-player{--panel:#202023;--bg:#171719;--soft:#303033;--text:#f7f7f8;--muted:#b8b8bf;--line:#ffffff1f;--line-strong:#ffffff35;--brand:#fa4567;--brand-text:#ff7992;--on-brand:#fff;--tint:#ff466c22;--success:#9ae5c0;--success-bg:#9ae5c019;width:100%;max-width:100%;height:100dvh;max-height:100dvh;margin:0;padding:0;border:0;border-radius:0;background:#000;color:#fff;overflow:hidden;overscroll-behavior:none}
+.mobile-player .player-fullscreen-root{width:100%;height:100%;background:#000;overflow:hidden}
+.mobile-player .player-fullscreen-root:is(:fullscreen,:-webkit-full-screen){width:100%;height:100%;max-width:none;max-height:none}
 .mobile-player .mobile-only{display:block}
 .mobile-player .player-heading,.mobile-player .player-toolbar{display:none}
 .mobile-player .player-layout{display:block;width:100%;height:100%;padding:0;gap:0}
@@ -89,6 +91,8 @@
 .mobile-episode-rail{padding:10px 13px;margin-bottom:12px;border-radius:9px;background:#1c1c1fe8}
 .mobile-bottom-actions{display:flex;align-items:center;justify-content:flex-end;gap:16px;pointer-events:auto}
 .mobile-bottom-actions button{color:#fff}
+.mobile-player .mobile-bottom-actions #mobileVideoFullscreenBtn{flex:none;width:44px;min-height:44px;margin:0 0 12px;padding:0;background:transparent;border:0}
+.mobile-player .mobile-bottom-actions #mobileEpisodesBtn{min-width:0}
 .mobile-player .mobile-settings-heading{position:relative;justify-content:center;min-height:40px;padding:0 34px;margin-bottom:12px}
 .mobile-player .mobile-settings-heading #closePlayerPreferencesBtn{position:absolute;left:-6px;top:0}
 .mobile-player .mobile-setting-group{padding:12px;border-radius:12px;background:#ffffff0b;margin:8px 0 12px}
@@ -114,6 +118,7 @@
 .player-landscape .mobile-time{font-size:12px;font-variant-numeric:tabular-nums;flex:none;min-width:34px}
 .player-landscape .mobile-bottom-actions{gap:18px;min-height:38px}
 .player-landscape .mobile-bottom-actions button{font-size:14px;font-weight:500;min-height:38px;padding:5px 8px;margin:0;background:transparent;border:0;width:auto;flex:none}
+.mobile-player.player-landscape .mobile-bottom-actions #mobileVideoFullscreenBtn{width:38px;min-height:38px;margin:0}
 .player-landscape #mobileEpisodesBtn small,.player-landscape #mobileEpisodesBtn>.mobile-episode-chevron{display:none}
 .player-landscape[data-paused=true] #mobileTransportBtn .control-pause,.player-landscape[data-paused=false] #mobileTransportBtn .control-play{display:none}
 .player-landscape .mobile-player-heading,.player-landscape .mobile-player-caption{transition:opacity .15s ease}

@@ -34,10 +34,14 @@ type sourceSettings struct {
 	Huangguo *huangguoSettings `json:"huangguo,omitempty"`
 	Huangdou *siteSettings     `json:"huangdou,omitempty"`
 	Hongguo  *siteSettings     `json:"hongguo,omitempty"`
+	Huangju  *siteSettings     `json:"huangju,omitempty"`
+	Yeguo    *siteSettings     `json:"yeguo,omitempty"`
+	DSD      *siteSettings     `json:"dsd,omitempty"`
 }
 
 type siteSettings struct {
 	BaseURL string `json:"baseURL,omitempty"`
+	APIURL  string `json:"apiURL,omitempty"`
 }
 
 type huangguoSettings struct {
@@ -81,6 +85,15 @@ func documentFromConfig(cfg Config) configDocument {
 	if cfg.HongguoURL != "" {
 		sources.Hongguo = &siteSettings{BaseURL: cfg.HongguoURL}
 	}
+	if cfg.HuangjuURL != "" || cfg.HuangjuAPIURL != "" {
+		sources.Huangju = &siteSettings{BaseURL: cfg.HuangjuURL, APIURL: cfg.HuangjuAPIURL}
+	}
+	if cfg.YeguoURL != "" || cfg.YeguoAPIURL != "" {
+		sources.Yeguo = &siteSettings{BaseURL: cfg.YeguoURL, APIURL: cfg.YeguoAPIURL}
+	}
+	if cfg.DSDURL != "" {
+		sources.DSD = &siteSettings{BaseURL: cfg.DSDURL}
+	}
 	huangguo := huangguoSettings{AIURL: cfg.HuangguoAIURL, VideoURL: cfg.HuangguoVideoURL}
 	legacy := legacyAPISettings{Token: cfg.Token, AESKeyHex: cfg.AESKeyHex, InterfaceKey: cfg.InterfaceKey, ParamKey: cfg.ParamKey, ParamIV: cfg.ParamIV}
 	if cfg.APIBase != defaults.APIBase {
@@ -95,7 +108,7 @@ func documentFromConfig(cfg Config) configDocument {
 	if huangguo.AIURL != "" || huangguo.VideoURL != "" || huangguo.LegacyAPI != nil {
 		sources.Huangguo = &huangguo
 	}
-	if sources.Huangguo != nil || sources.Huangdou != nil || sources.Hongguo != nil {
+	if sources.Huangguo != nil || sources.Huangdou != nil || sources.Hongguo != nil || sources.Huangju != nil || sources.Yeguo != nil || sources.DSD != nil {
 		document.Sources = &sources
 	}
 	advanced := advancedSettings{InsecureTLS: cfg.InsecureTLS}
@@ -135,6 +148,15 @@ func (document configDocument) config() (Config, error) {
 		}
 		if sources.Hongguo != nil {
 			cfg.HongguoURL = sources.Hongguo.BaseURL
+		}
+		if sources.Huangju != nil {
+			cfg.HuangjuURL, cfg.HuangjuAPIURL = sources.Huangju.BaseURL, sources.Huangju.APIURL
+		}
+		if sources.Yeguo != nil {
+			cfg.YeguoURL, cfg.YeguoAPIURL = sources.Yeguo.BaseURL, sources.Yeguo.APIURL
+		}
+		if sources.DSD != nil {
+			cfg.DSDURL = sources.DSD.BaseURL
 		}
 		if source := sources.Huangguo; source != nil {
 			cfg.HuangguoAIURL, cfg.HuangguoVideoURL = source.AIURL, source.VideoURL

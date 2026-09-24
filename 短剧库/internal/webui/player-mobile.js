@@ -1,12 +1,12 @@
 (() => {
-  window.JukuPlayerMobile = ({panel, video, state, showEpisodes, showPreferences}) => {
+  window.JukuPlayerMobile = ({panel, video, fullscreen, state, showEpisodes, showPreferences}) => {
     const node = id => document.getElementById(id);
     const mode = window.matchMedia('(max-width:700px), (max-height:500px) and (pointer:coarse)');
     const progress = node('mobilePlaybackProgress');
     const play = node('mobilePlayPauseBtn');
     const transport = node('mobileTransportBtn');
     const rate = node('playbackRate'), quality = node('playbackQuality');
-    const orientation = window.JukuPlayerOrientation({panel, video, active: () => mode.matches && panel.open});
+    const orientation = window.JukuPlayerOrientation({panel, video, fullscreen, active: () => mode.matches && panel.open});
     const heading = panel.querySelector('.mobile-player-heading'), caption = panel.querySelector('.mobile-player-caption');
     let scrubbing = false, qualitySignature = '', lastTitle = '', waiting = false, hideTimer = null, previousLandscape = false;
     const time = value => {const seconds = Math.max(0, Math.floor(Number(value) || 0)); return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');};
@@ -60,8 +60,9 @@
     function update() {
       const value = state();
       panel.classList.toggle('mobile-player', mode.matches);
-      video.controls = !mode.matches;
+      video.controls = !mode.matches || fullscreen.native();
       orientation.update();
+      fullscreen.update();
       if (!mode.matches) {hideControls(false); clearTimeout(hideTimer); return;}
       panel.classList.toggle('playback-loading', Boolean(value.loading));
       panel.classList.toggle('playback-buffering', waiting);
@@ -89,8 +90,6 @@
           button.disabled = select.disabled;
         }
       }
-      node('mobileFullscreenBtn').hidden = node('playerFullscreenBtn').hidden;
-      node('mobileFullscreenBtn').textContent = document.fullscreenElement === panel || document.webkitFullscreenElement === panel ? '退出全屏' : '全屏播放';
       node('mobilePreferencesTitle').textContent = panel.dataset.playerSheet === 'rate' ? '倍速' : panel.dataset.playerSheet === 'quality' ? '清晰度' : '更多';
       if (previousLandscape !== orientation.landscape() || video.paused || value.loading || waiting || panel.classList.contains('episodes-open') || panel.classList.contains('preferences-open')) reveal();
       previousLandscape = orientation.landscape();
@@ -98,26 +97,17 @@
     }
     choices(rate, node('mobileRateChoices'));
     node('mobileBackBtn').addEventListener('click', () => {
-      if (orientation.landscape()) {
-        orientation.portrait();
-        if (document.fullscreenElement === panel) document.exitFullscreen().catch(() => {});
-        else if (document.webkitFullscreenElement === panel) document.webkitExitFullscreen?.();
-      } else panel.close();
+      if (fullscreen.active()) {
+        fullscreen.exit();
+        if (orientation.landscape()) orientation.portrait();
+      } else if (orientation.landscape()) orientation.portrait();
+      else panel.close();
     });
     node('mobileEpisodesBtn').addEventListener('click', showEpisodes);
     node('mobilePlayerSettingsBtn').addEventListener('click', () => showPreferences('settings'));
     for (const id of ['mobileRateBtn', 'mobileLandscapeRateBtn']) node(id).addEventListener('click', () => showPreferences('rate'));
     node('mobileLandscapeQualityBtn').addEventListener('click', () => showPreferences('quality'));
     node('mobileNextEpisodeBtn').addEventListener('click', () => node('nextEpisodeBtn').click());
-    node('mobileFullscreenBtn').addEventListener('click', async () => {
-      try {
-        if (document.fullscreenElement === panel || document.webkitFullscreenElement === panel) await (document.exitFullscreen?.() || document.webkitExitFullscreen?.());
-        else if (panel.requestFullscreen) await panel.requestFullscreen();
-        else if (panel.webkitRequestFullscreen) await panel.webkitRequestFullscreen();
-        else node('playerFullscreenBtn').click();
-      } catch (_) {}
-      update();
-    });
     function togglePlayback() {
       if (!mode.matches || !panel.open || state().loading || !video.hasAttribute('src')) return;
       if (video.paused) video.play().catch(() => {}); else video.pause();
@@ -147,7 +137,7 @@
     panel.addEventListener('keydown', reveal);
     panel.addEventListener('pointerdown', event => {if (event.target.closest('button,input,select')) reveal();});
     document.addEventListener('dialoglayerchange', () => {update(); reveal();});
-    document.addEventListener('fullscreenchange', update);
+    panel.addEventListener('jukufullscreenchange', () => {update(); reveal();});
     for (const type of ['timeupdate', 'durationchange', 'progress']) video.addEventListener(type, updateProgress);
     for (const type of ['loadedmetadata', 'playing', 'pause', 'ended', 'ratechange', 'emptied', 'error']) video.addEventListener(type, update);
     rate.addEventListener('change', update);
@@ -157,8 +147,6 @@
       scrubbing = false;
       clearTimeout(hideTimer);
       hideControls(false);
-      if (document.fullscreenElement === panel) document.exitFullscreen().catch(() => {});
-      else if (document.webkitFullscreenElement === panel) document.webkitExitFullscreen?.();
     });
     update();
     return {update, updateProgress, active: () => mode.matches, rotation: () => orientation.rotation()};

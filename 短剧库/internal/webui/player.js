@@ -12,7 +12,7 @@
   let transport = 'mse';
   let allowRemux = false, streamRemux = false;
   let mediaPlan = null, planMode = 'auto', planKey = '', planFallbacks = 0, networkRefreshes = 0;
-  try {quality = Number(localStorage.getItem('juku.playback.quality')) || 0;} catch (_) {}
+  quality = Number(window.JukuPreferences?.read('playback.quality', 0)) || 0;
   if (!Number.isInteger(quality) || quality < 0 || quality > 4320) quality = 0;
   let dramaID = '';
   let dramaName = '';
@@ -52,18 +52,19 @@
   const historyStatus = node('playbackHistoryStatus');
   const prefetchToggle = node('prefetchNextEpisode');
   const prefetchStatus = node('prefetchStatus');
-  try {prefetchToggle.checked = localStorage.getItem('juku.playback.prefetchNext') !== 'false';} catch (_) {}
-  const mobile = window.JukuPlayerMobile({panel, video, state: () => ({title: dramaName, merged: episodes[currentIndex - 1]?.merged, episode: episodes[currentIndex - 1]?.episode, total: episodes.length, duration: playbackDuration, loading, releaseStatus, vip: episodes[currentIndex - 1]?.vip}), showEpisodes: showEpisodePanel, showPreferences: section => setPlayerPreferences(true, section)});
+  prefetchToggle.checked = window.JukuPreferences?.read('playback.prefetchNext', true) !== false;
+  const fullscreen = window.JukuPlayerFullscreen({panel, video, ready: () => panel.open && !loading && video.hasAttribute('src') && video.readyState >= 1 && !video.error, beforeEnter: () => {
+    closeEpisodePanel();
+    if (!node('playerPreferences').hidden) setPlayerPreferences(false);
+  }});
+  const mobile = window.JukuPlayerMobile({panel, video, fullscreen, state: () => ({title: dramaName, merged: episodes[currentIndex - 1]?.merged, episode: episodes[currentIndex - 1]?.episode, total: episodes.length, duration: playbackDuration, loading, releaseStatus, vip: episodes[currentIndex - 1]?.vip}), showEpisodes: showEpisodePanel, showPreferences: section => setPlayerPreferences(true, section)});
   const controls = window.JukuPlayerControls({panel, video, mobile: () => mobile.active(), rotation: () => mobile.rotation(), canSwipe: () => panel.open && episodes.length > 0 && !panel.classList.contains('episodes-open') && node('playerPreferences').hidden, swipe: direction => {
     const next = currentIndex + direction;
     if (next < 1) return '已经是第一集';
     if (next > episodes.length) return '已经是最后一集';
     playEpisode(next);
     return '第 ' + episodes[next - 1].episode + ' 集';
-  }, ready: () => !loading && Boolean(currentIndex), fullscreen: () => {
-    if (document.fullscreenElement === node('playbackStage') || document.webkitFullscreenElement === node('playbackStage')) node('exitPlayerFullscreenBtn').click();
-    else if (!node('playerFullscreenBtn').hidden) node('playerFullscreenBtn').click();
-  }});
+  }, ready: () => !loading && Boolean(currentIndex), fullscreen: () => fullscreen.toggle()});
 
   function clear(element) {
     while (element.firstChild) element.removeChild(element.firstChild);
@@ -598,7 +599,7 @@
   }
 
   prefetchToggle.addEventListener('change', () => {
-    try {localStorage.setItem('juku.playback.prefetchNext', String(prefetchToggle.checked));} catch (_) {}
+    window.JukuPreferences?.save('playback.prefetchNext', prefetchToggle.checked);
     prefetchAttempted = 0;
     const version = ++prefetchVersion;
     prefetchStatus.hidden = true;
@@ -840,7 +841,7 @@
   node('playbackRate').addEventListener('change', () => {video.playbackRate = Number(node('playbackRate').value) || 1;});
   qualitySelect.addEventListener('change', () => {
     quality = Number(qualitySelect.value) || 0;
-    try {localStorage.setItem('juku.playback.quality', String(quality));} catch (_) {}
+    window.JukuPreferences?.save('playback.quality', quality);
     if (currentIndex) playEpisode(currentIndex, !loading && Number.isFinite(video.currentTime) ? video.currentTime : lastPosition, !video.paused);
   });
   node('closePlayerBtn').addEventListener('click', () => panel.close());
@@ -934,13 +935,27 @@
     node('playerPreferencesBtn').setAttribute('aria-expanded', 'false');
     node('toggleEpisodesBtn').setAttribute('aria-expanded', 'false');
   });
-  try {
-    node('autoNextEpisode').checked = localStorage.getItem('duanju.playback.autoNext') !== 'false';
-    const rate = localStorage.getItem('duanju.playback.rate');
-    if (Array.from(node('playbackRate').options).some(option => option.value === rate)) node('playbackRate').value = rate;
-  } catch (_) {}
-  node('autoNextEpisode').addEventListener('change', () => {try {localStorage.setItem('duanju.playback.autoNext', String(node('autoNextEpisode').checked));} catch (_) {}});
-  node('playbackRate').addEventListener('change', () => {try {localStorage.setItem('duanju.playback.rate', node('playbackRate').value);} catch (_) {}});
+  node('autoNextEpisode').checked = window.JukuPreferences?.read('playback.autoNext', true) !== false;
+  const storedRate = String(window.JukuPreferences?.read('playback.rate', '1') || '1');
+  if (Array.from(node('playbackRate').options).some(option => option.value === storedRate)) node('playbackRate').value = storedRate;
+  node('autoNextEpisode').addEventListener('change', () => window.JukuPreferences?.save('playback.autoNext', node('autoNextEpisode').checked));
+  node('playbackRate').addEventListener('change', () => window.JukuPreferences?.save('playback.rate', node('playbackRate').value));
+  window.JukuPreferences?.onChange(event => {
+    if (event.keys.includes('playback.autoNext')) node('autoNextEpisode').checked = event.values['playback.autoNext'] !== false;
+    if (event.keys.includes('playback.rate')) {
+      const value = String(event.values['playback.rate'] || '1');
+      if (Array.from(node('playbackRate').options).some(option => option.value === value)) node('playbackRate').value = value;
+      if (!loading) video.playbackRate = Number(node('playbackRate').value) || 1;
+    }
+    if (event.keys.includes('playback.prefetchNext')) {
+      const value = event.values['playback.prefetchNext'] !== false;
+      if (prefetchToggle.checked !== value) prefetchToggle.checked = value;
+    }
+    if (event.keys.includes('playback.quality')) {
+      const value = Number(event.values['playback.quality']) || 0;
+      if (Number.isInteger(value) && value >= 0 && value <= 4320) quality = value;
+    }
+  });
   const pip = node('pictureInPictureBtn');
   pip.hidden = !document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== 'function';
   pip.title = '画中画展示视频，网页弹幕留在当前页面';

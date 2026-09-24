@@ -42,6 +42,10 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if source := request.URL.Query().Get("source"); source != "" && source != sourceHongguo {
+		app.handleProviderLibrarySearch(writer, request, keyword, source)
+		return
+	}
 	if !requireSource(writer, request.Context(), sourceHongguo) {
 		return
 	}
@@ -77,6 +81,10 @@ func (app *UIApp) handleLibrarySearch(writer http.ResponseWriter, request *http.
 }
 
 func (app *UIApp) importLibrarySearchDramas(items []Drama) []Drama {
+	return app.importSourceSearchDramas(sourceHongguo, items)
+}
+
+func (app *UIApp) importSourceSearchDramas(source string, items []Drama) []Drama {
 	dramas := append([]Drama{}, items...)
 	if len(dramas) > 0 {
 		positions := make(map[string]int, len(dramas))
@@ -91,7 +99,7 @@ func (app *UIApp) importLibrarySearchDramas(items []Drama) []Drama {
 				known[drama.ID] = drama
 			}
 		}
-		changed := app.librarySources[sourceHongguo].Status == ""
+		changed := app.librarySources[source].Status == ""
 		for index, drama := range dramas {
 			previous, found := known[drama.ID]
 			if found {
@@ -105,16 +113,16 @@ func (app *UIApp) importLibrarySearchDramas(items []Drama) []Drama {
 			return dramas
 		}
 		newDramas := app.newSortMetadataDramasLocked(dramas)
-		app.dramas = mergeSourceDramas(app.dramas, dramas, nil, sourceHongguo)
+		app.dramas = mergeSourceDramas(app.dramas, dramas, nil, source)
 		app.enqueueSortMetadataLocked(newDramas, false)
 		app.loadedAt = time.Now()
 		if app.librarySources == nil {
 			app.librarySources = map[string]librarySourceState{}
 		}
-		state := app.librarySources[sourceHongguo]
+		state := app.librarySources[source]
 		state.Count = 0
 		for _, drama := range app.dramas {
-			if dramaProvider(drama) == sourceHongguo {
+			if dramaProvider(drama) == source {
 				state.Count++
 			}
 			if index, found := positions[drama.ID]; found {
@@ -126,7 +134,7 @@ func (app *UIApp) importLibrarySearchDramas(items []Drama) []Drama {
 		if state.Status == "" {
 			state.Status = "ready"
 		}
-		app.librarySources[sourceHongguo] = state
+		app.librarySources[source] = state
 		app.libraryDirty = true
 		app.libraryRevision++
 		app.mu.Unlock()

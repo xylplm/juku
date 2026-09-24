@@ -14,7 +14,7 @@ func (app *UIApp) allowPlaybackDirect(ctx context.Context, media *playbackMediaS
 	for _, selected := range app.mediaResources().snapshot().DirectSources {
 		allowed = allowed || selected == accountSourceGroup(source)
 	}
-	if !allowed || media.local != "" || len(media.key) != 0 || len(media.media.HLSKey) != 0 || len(media.media.CENCKey) != 0 {
+	if !allowed || media.local != "" || media.media.credentials != nil || len(media.key) != 0 || len(media.media.HLSKey) != 0 || len(media.media.CENCKey) != 0 {
 		return false
 	}
 	parsed, err := url.Parse(media.media.URL)

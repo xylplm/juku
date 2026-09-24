@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -109,6 +110,65 @@ func TestHuangguoRankingStructuredData(t *testing.T) {
 	}
 }
 
+func TestRankingCatalogIncludesProviderBoards(t *testing.T) {
+	writer := httptest.NewRecorder()
+	(&UIApp{}).handleRankings(writer, httptest.NewRequest("GET", "/api/ui/rankings", nil))
+	if writer.Code != http.StatusOK {
+		t.Fatal(writer.Body.String())
+	}
+	var body struct {
+		Boards []rankingBoard `json:"boards"`
+	}
+	if err := json.NewDecoder(writer.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, board := range body.Boards {
+		got[board.ID] = board.Source
+	}
+	for id, source := range map[string]string{
+		"huangju-hot":     sourceHuangju,
+		"huangju-new":     sourceHuangju,
+		"yeguo-recommend": sourceYeguo,
+		"dsd-catalog":     sourceDSD,
+	} {
+		if got[id] != source {
+			t.Fatalf("missing ranking board %s for %s in %+v", id, source, got)
+		}
+	}
+}
+
+func TestYeguoRankingFallsBackToDefaultCatalog(t *testing.T) {
+	d := providerSourceFixtureDownloader(t, func(request *http.Request, form url.Values) (*http.Response, error) {
+		if request.URL.Host != "api.yeguo.test" {
+			t.Fatalf("unexpected host: %s", request.URL.Host)
+		}
+		switch request.URL.Path {
+		case "/api/home/contentOptions":
+			return rankingHTTPResponse(request, http.StatusServiceUnavailable, `unavailable`), nil
+		case "/api/theater/exploreList":
+			if form.Get("page") != "1" || form.Get("limit") != "20" || form.Get("recommend") != "" {
+				t.Fatalf("unexpected yeguo ranking request: %s %v", request.URL.String(), form)
+			}
+			return rankingHTTPResponse(request, http.StatusOK, `{"status":"1","data":{"list":[{"video_id":"901","title":"野果榜单样本","episode_count":"6","serialize_status":"2"}],"page":1,"limit":20,"total":1,"has_more":"0"}}`), nil
+		default:
+			t.Fatalf("unexpected yeguo path: %s", request.URL.Path)
+		}
+		return rankingHTTPResponse(request, http.StatusNotFound, ""), nil
+	})
+	d.yeguoClient().access = &yeguoAccess{base: "https://api.yeguo.test", identifier: "fixture-trace", loadedAt: time.Now()}
+	board, _ := findRankingBoard("yeguo-recommend")
+	page, err := d.fetchRankingPage(context.Background(), board, 1)
+	if err != nil || len(page.Items) != 1 || page.Items[0].Drama.ID != "yeguo:901" || page.Items[0].Rank != 1 || page.HasMore {
+		t.Fatalf("yeguo ranking did not use default catalog fallback: %+v %v", page, err)
+	}
+	legacy := rankingBoard{ID: "legacy-yeguo-recommend", Source: sourceYeguo, path: "recommend"}
+	page, err = d.fetchRankingPage(context.Background(), legacy, 1)
+	if err != nil || len(page.Items) != 1 || page.Items[0].Drama.ID != "yeguo:901" {
+		t.Fatalf("legacy yeguo recommend fallback failed: %+v %v", page, err)
+	}
+}
+
 func TestHongguoReleaseLabelsUseSourceMeaning(t *testing.T) {
 	now := time.Date(2026, 9, 12, 17, 30, 0, 0, time.UTC)
 	for _, test := range []struct{ label, expected string }{
@@ -152,6 +212,9 @@ func TestRankingCacheAndStaleRecovery(t *testing.T) {
 			return rankingHTTPResponse(request, 503, "temporarily unavailable"), nil
 		}
 		page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+		if page == 0 {
+			page = 1
+		}
 		return rankingHTTPResponse(request, 200, rankingFixture(board, page, rankingRows(page))), nil
 	})
 	ctx := context.Background()
@@ -252,6 +315,7 @@ func TestRankingHandlerRegistersPlayableMetadataOnce(t *testing.T) {
 		{"GET", "/api/ui/rankings", 200}, {"POST", "/api/ui/rankings", 405},
 		{"GET", "/api/ui/rankings?board=missing", 400}, {"GET", "/api/ui/rankings?board=hongguo-hot&page=0", 400},
 		{"GET", "/api/ui/rankings?board=hongguo-hot&page=1.5", 400}, {"GET", "/api/ui/rankings?board=huangguo-hot&page=2", 400},
+		{"GET", "/api/ui/rankings?board=dsd-catalog&page=2", 400},
 	} {
 		writer := httptest.NewRecorder()
 		a.handleRankings(writer, httptest.NewRequest(test.method, test.path, nil))
@@ -321,5 +385,27 @@ func TestLiveRankingsMetadata(t *testing.T) {
 				t.Logf("page 2: %d entries, first rank %d", len(next.Items), next.Items[0].Rank)
 			}
 		})
+	}
+}
+
+func TestRankingCachePersistsAcrossDownloaderRestart(t *testing.T) {
+	board, _ := findRankingBoard("hongguo-hot")
+	var calls atomic.Int32
+	d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return rankingHTTPResponse(request, 200, rankingFixture(board, 1, rankingRows(1))), nil
+	})
+	page, err := d.loadRankingPage(context.Background(), board, 1, false)
+	if err != nil || len(page.Items) == 0 || calls.Load() != 1 {
+		t.Fatal("initial ranking fetch failed", page, err, calls.Load())
+	}
+	restarted := NewDownloader(d.cfg)
+	restarted.client = &http.Client{Transport: rankingTransport(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("persistent ranking cache was not used: %s", request.URL.String())
+		return nil, nil
+	})}
+	cached, err := restarted.loadRankingPage(context.Background(), board, 1, false)
+	if err != nil || len(cached.Items) != len(page.Items) || cached.Items[0].Drama.ID != page.Items[0].Drama.ID {
+		t.Fatal("restored ranking cache changed", cached, err)
 	}
 }

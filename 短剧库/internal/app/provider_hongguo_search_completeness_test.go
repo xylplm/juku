@@ -257,7 +257,7 @@ func TestLibrarySearchCompletenessResponseAndPersistence(t *testing.T) {
 
 func TestHongguoSearchNormalizedTitleRanking(t *testing.T) {
 	query := hongguoSearchText("  ＡＢＣ：无限 叠加攻击  ")
-	if query != "abc无限叠加攻击" || hongguoTitleSearchRank("abc 无限叠加攻击", query) != 0 || hongguoTitleSearchRank("前缀ABC！无限叠加攻击（第五季）", query) != 2 || hongguoTitleSearchRank("无关剧名", query) != 3 {
+	if query != "abc无限叠加攻击" || hongguoTitleSearchRank("abc 无限叠加攻击", query) != 0 || hongguoTitleSearchRank("前缀ABC！无限叠加攻击（第五季）", query) != 2 || hongguoTitleSearchRank("无关剧名", query) != 4 {
 		t.Fatal("punctuation, spacing or full-width text changed title relevance", query)
 	}
 	if hongguoSearchText("？！？") == "" {

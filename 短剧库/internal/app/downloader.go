@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,15 @@ type Downloader struct {
 	providerHosts         map[string]string
 	apiMu                 sync.Mutex
 	apiBase               string
+	apiFailures           map[string]time.Time
+	huangjuOnce           sync.Once
+	huangju               *huangjuAPIClient
+	yeguoOnce             sync.Once
+	yeguo                 *yeguoAPIClient
+	dsdCatalog            dsdCatalogState
+	providerCatalog       providerCatalogStore
+	previewMu             sync.Mutex
+	previewSessions       map[string]*huangguoPreviewSession
 	limiter               *requestLimiter
 	proxyRouter           *proxyRouter
 	ffmpegMu              sync.Mutex
@@ -67,7 +77,7 @@ func NewDownloader(cfg Config) *Downloader {
 		cfg.OutputDir = absolute
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: cfg.InsecureTLS}
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: cfg.InsecureTLS}
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 20 * time.Second
 	router := &proxyRouter{}
@@ -83,7 +93,8 @@ func NewDownloader(cfg Config) *Downloader {
 		}
 		return net.DefaultResolver.LookupHost(ctx, host)
 	}
-	downloader.client = &http.Client{Transport: images, Timeout: 45 * time.Second}
+	jar, _ := cookiejar.New(nil)
+	downloader.client = &http.Client{Transport: images, Timeout: 45 * time.Second, Jar: jar}
 	return downloader
 }
 
@@ -115,14 +126,8 @@ func (d *Downloader) DownloadEpisodeWithProgress(ctx context.Context, task Task,
 		return nil
 	}
 	partPath := strings.TrimSuffix(task.OutPath, filepath.Ext(task.OutPath)) + ".part.mp4"
-	_ = os.Remove(partPath)
-	defer os.Remove(partPath)
 	if callback != nil {
 		callback(DownloadProgress{Phase: "preparing"})
-	}
-	ffmpeg, err := d.ensureFFmpeg(ctx)
-	if err != nil {
-		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(task.OutPath), 0o755); err != nil {
 		return err
@@ -145,12 +150,31 @@ func (d *Downloader) DownloadEpisodeWithProgress(ctx context.Context, task Task,
 				lastErr = resolveErr
 				return
 			}
+			if handled, directErr := d.downloadDirectProviderMedia(ctx, task, media, key, progress); handled {
+				lastErr = directErr
+				return
+			}
+			ffmpeg, err := d.ensureFFmpeg(ctx)
+			if err != nil {
+				lastErr = err
+				return
+			}
+			_ = os.Remove(partPath)
 			progress.setMediaTotal(media.Duration)
 			progress.report("downloading", true)
 			proxy, err := d.newHLSProxy(ctx, media, key)
 			if err != nil {
 				lastErr = err
 				return
+			}
+			if media.Playlist != "" {
+				if cache, cacheErr := prepareDownloadMediaCache(partPath+".segments", media, key); cacheErr == nil {
+					proxy.cache = cache
+				} else {
+					lastErr = cacheErr
+					proxy.Close()
+					return
+				}
 			}
 			defer proxy.Close()
 			args := []string{
@@ -260,6 +284,7 @@ func (d *Downloader) DownloadEpisodeWithProgress(ctx context.Context, task Task,
 				lastErr = renameErr
 				return
 			}
+			_ = os.RemoveAll(partPath + ".segments")
 			lastErr = nil
 		}()
 		if lastErr == nil {

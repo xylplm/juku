@@ -3,7 +3,7 @@ import { $, element, button, sourceLabel, normalizeSource, readPreference, saveP
 export function createShell(app) {
   const main = $('workspaceMain');
   const positions = {library: 0, following: 0, downloads: 0, users: 0};
-  let current = '', sourceStates = {}, sourceLoading = false, sourceRequest = '';
+  let current = '', sourceStates = {}, sourceLoading = false, sourcePhase = '', sourceRequest = '';
   let sourceNotice;
   const sourceRows = new Map(), sourceErrors = new Map();
 
@@ -50,26 +50,47 @@ export function createShell(app) {
   }
 
   function updateSourceRows() {
-    const statuses = {loading: '正在获取', ready: '已就绪', success: '已更新', done: '已更新', failed: '暂不可用', error: '暂不可用', partial: '部分更新', cached: '使用缓存', pending: '等待更新'};
+    const statuses = {loading: '正在获取', canceled: '已停止', ready: '已就绪', success: '已更新', done: '已更新', failed: '暂不可用', error: '暂不可用', partial: '部分更新', cached: '使用缓存', pending: '等待更新'};
     for (const [id, controls] of sourceRows) {
       const state = sourceStates[id];
       const allowed = !app.viewer?.sources || app.viewer.sources.includes(normalizeSource(id));
       const busy = sourceRequest === id || sourceLoading && state?.status === 'loading';
+      const stopping = sourceRequest === 'cancel';
       controls.row.hidden = !allowed;
       controls.status.textContent = sourceRequest === id ? '正在提交' : state ? statuses[state.status] || (state.error ? '暂不可用' : '已有缓存') : '未检查';
       const date = state?.updatedAt && !state.updatedAt.startsWith('0001') ? new Date(state.updatedAt).toLocaleString() : '';
       controls.detail.textContent = [Number.isFinite(state?.count) ? state.count + ' 部' : '', date].filter(Boolean).join(' · ');
-      controls.error.textContent = sourceErrors.get(id) || state?.error || '';
-      controls.action.disabled = !allowed || sourceLoading || Boolean(sourceRequest);
-      controls.action.textContent = busy ? '更新中…' : '更新';
+      controls.error.textContent = sourceErrors.get(id) || state?.error || state?.phase || (busy ? sourcePhase : '') || '';
+      controls.action.disabled = !allowed || stopping || Boolean(sourceRequest) || sourceLoading && !busy;
+      controls.action.textContent = busy ? '停止' : '更新';
       controls.action.setAttribute('aria-busy', String(busy));
-      controls.action.title = sourceLoading || sourceRequest ? '正在更新剧库，完成后可再次更新' : '只更新' + controls.label + '的目录和资料';
+      controls.action.title = busy ? '停止当前剧库更新，已入库内容会保留，稍后可继续更新' : sourceLoading || sourceRequest ? '正在更新其他站源，完成后可再次更新' : '只更新' + controls.label + '的目录和资料';
     }
-    if (sourceNotice) sourceNotice.textContent = sourceLoading || sourceRequest ? '正在更新剧库，已有内容可继续使用；完成后可单独更新站源。' : '点击对应站源的“更新”可查新、续载和补齐资料，失败时保留已有内容。';
+    if (sourceNotice) sourceNotice.textContent = sourceLoading || sourceRequest ? '正在更新剧库' + (sourcePhase ? '：' + sourcePhase : '') + '，已有内容可继续使用；可停止后稍后继续。' : '点击对应站源的“更新”可查新、续载和补齐资料，失败时保留已有内容。';
+  }
+
+  async function cancelSourceUpdate(id) {
+    if (sourceRequest || !sourceLoading) return;
+    sourceRequest = 'cancel';
+    updateSourceRows();
+    try {
+      const result = await app.api('/api/ui/dramas/cancel', {method: 'POST', body: '{}'});
+      sourceStates = result.sources || sourceStates;
+      sourceLoading = Boolean(result.loading);
+      sourcePhase = result.loadingPhase || '';
+      if (!result.canceled) sourceErrors.set(id, '当前没有正在执行的更新。');
+    } catch (error) {
+      sourceErrors.set(id, '停止失败：' + error.message);
+    } finally {
+      sourceRequest = '';
+      updateSourceRows();
+      void app.library.refresh();
+    }
   }
 
   async function updateSource(id) {
-    if (sourceLoading || sourceRequest || app.viewer?.sources && !app.viewer.sources.includes(normalizeSource(id))) return;
+    if (sourceRequest || app.viewer?.sources && !app.viewer.sources.includes(normalizeSource(id))) return;
+    if (sourceLoading) {await cancelSourceUpdate(id); return;}
     sourceRequest = id;
     sourceErrors.delete(id);
     updateSourceRows();
@@ -77,6 +98,7 @@ export function createShell(app) {
       const result = await app.api('/api/ui/dramas?update=1&source=' + encodeURIComponent(id));
       sourceStates = result.sources || {};
       sourceLoading = Boolean(result.loading);
+      sourcePhase = result.loadingPhase || '';
       if (result.updateAccepted === false) sourceErrors.set(id, '本次未提交：已有更新任务，可在完成后重试。');
     } catch (error) {
       sourceErrors.set(id, '更新请求失败：' + error.message);
@@ -88,7 +110,7 @@ export function createShell(app) {
   }
 
   function showSources() {
-    const names = {cloudfront: '黄果旧 API', huangguoai: '黄果网页', 'huangguo-video': '黄果备用网页', huangdou: '黄豆', hongguo: '红果'};
+    const names = {cloudfront: '黄果旧 API', huangguoai: '黄果网页', 'huangguo-video': '黄果备用网页', huangdou: '黄豆', hongguo: '红果', huangju: '剧果', yeguo: '野果', dsd: '帝果'};
     info('站源状态', content => {
       for (const [id, label] of Object.entries(names)) {
         if (app.viewer?.sources && !app.viewer.sources.includes(normalizeSource(id))) continue;
@@ -193,5 +215,5 @@ export function createShell(app) {
     setPage(window.JukuDialogs.page());
   }
 
-  return {init, access, info, page: () => current, resetScroll: () => {main.scrollTop = 0;}, sourceStates: (value, loading) => {sourceStates = value || {}; sourceLoading = Boolean(loading); updateSourceRows();}};
+  return {init, access, info, page: () => current, resetScroll: () => {main.scrollTop = 0;}, sourceStates: (value, loading, phase = '') => {sourceStates = value || {}; sourceLoading = Boolean(loading); sourcePhase = phase || ''; updateSourceRows();}};
 }

@@ -225,6 +225,12 @@ func (app *UIApp) librarySnapshotForSourceLocked(ctx context.Context, revision u
 	if sourceAllowed(ctx, sourceHongguo) {
 		more[sourceHongguo] = more[sourceHongguo] || hongguoCatalogHasMore(app.libraryApp)
 	}
+	for source, cursor := range app.libraryProviders {
+		base := providerCatalogSource(source)
+		if sourceAllowed(ctx, base) {
+			more[base] = more[base] || cursor.Initialized && !cursor.Exhausted
+		}
+	}
 	for source, value := range more {
 		if source != "" {
 			more[""] = more[""] || value
@@ -233,8 +239,10 @@ func (app *UIApp) librarySnapshotForSourceLocked(ctx context.Context, revision u
 	response["data"], response["total"], response["sources"], response["error"] = dramas, len(dramas), sources, librarySourceErrors(sources)
 	response["loading"], response["loadingMore"] = loading, loading && app.libraryMore
 	response["loadingSource"] = ""
+	response["loadingPhase"] = ""
 	if sourceAllowed(ctx, app.libraryLoadingSource) {
 		response["loadingSource"] = app.libraryLoadingSource
+		response["loadingPhase"] = app.libraryLoadingPhase
 	}
 	response["metadataRemaining"], response["hasMoreBySource"], response["hasMore"] = remaining, more, more[""]
 	pending := 0

@@ -52,13 +52,16 @@ function normalizeSource(value){
     let source=String(value||'').trim().toLowerCase();
     if(/^https?:\/\//.test(source)){try{source=new URL(source).hostname;}catch(_){return '';}}
     source=source.replace(/^www\./,'').split(':')[0];
-    const aliases={huangguo:'huangguo',huangguoai:'huangguo','huangguo-video':'huangguo','huangguoai.com':'huangguo','huangguo.video':'huangguo',cloudfront:'huangguo',api:'huangguo',huangdou:'huangdou','tideember.cc':'huangdou','xqjurgek.top':'huangdou',hongguo:'hongguo','hongguoduanju.com':'hongguo'};
-    return Object.prototype.hasOwnProperty.call(aliases,source)?aliases[source]:'';
+    const aliases={huangguo:'huangguo',huangguoai:'huangguo','huangguo-video':'huangguo','huangguoai.com':'huangguo','huangguo.video':'huangguo',cloudfront:'huangguo',api:'huangguo',huangdou:'huangdou','tideember.cc':'huangdou','xqjurgek.top':'huangdou',hongguo:'hongguo','hongguoduanju.com':'hongguo',huangju:'huangju','huangju.net':'huangju','api.huangju.net':'huangju','yanyushorttv.cc':'huangju','api.yanyushorttv.cc':'huangju','yanyushorttv.top':'huangju','api.yanyushorttv.top':'huangju',yeguo:'yeguo','delta.ygrwdsgt.cc':'yeguo','ygdj7.com':'yeguo','yeguodj.com':'yeguo','buxefaex.cc':'yeguo','fzchosdi.cc':'yeguo','ocdjlxow.cc':'yeguo',dsd:'dsd','dsd.com.se':'dsd'};
+    if(Object.prototype.hasOwnProperty.call(aliases,source))return aliases[source];
+    if(source.endsWith('.buxefaex.cc')||source.endsWith('.fzchosdi.cc')||source.endsWith('.ocdjlxow.cc'))return 'yeguo';
+    if(source.endsWith('.yanyushorttv.cc')||source.endsWith('.yanyushorttv.top'))return 'huangju';
+    return '';
   }
 
 function sourceKey(dr){ for(const hint of [dr.source,dr.id,dr.channelName,dr.channel_name,dr.site,dr.host]){const source=normalizeSource(hint);if(source)return source;} if(!dr.source&&['黄果原创','成人短剧','成人漫剧','AI魔改'].includes(dr.channelName))return 'huangguo'; return String(dr.source||'other').trim().toLowerCase()||'other'; }
 
-function sourceLabel(value){ const names={huangguo:'黄果',huangdou:'黄豆',hongguo:'红果',other:'其他'};return names[normalizeSource(value)||value]||value; }
+function sourceLabel(value){ const names={huangguo:'黄果',huangdou:'黄豆',hongguo:'红果',huangju:'剧果',yeguo:'野果',dsd:'帝果',other:'其他'};return names[normalizeSource(value)||value]||value; }
 
 function categoryName(dr){ const category=firstNonEmpty(dr.categoryName,dr.category_name,dr.typeName,dr.type_name,dr.sortName,dr.sort_name,dr.category,dr.categoryNameSnake);if(category)return category;return ['黄果原创','成人短剧','成人漫剧','AI魔改'].includes(dr.channelName)?dr.channelName:'未分类'; }
 
@@ -147,10 +150,12 @@ export function populateIcons(root = document) {
 }
 
 export function readPreference(key, fallback) {
+  if (window.JukuPreferences) return window.JukuPreferences.read(key, fallback);
   try {const value = localStorage.getItem('duanju.' + key); return value === null ? fallback : JSON.parse(value);} catch (_) {return fallback;}
 }
 
 export function savePreference(key, value) {
+  if (window.JukuPreferences) {window.JukuPreferences.save(key, value); return;}
   try {localStorage.setItem('duanju.' + key, JSON.stringify(value));} catch (_) {}
 }
 

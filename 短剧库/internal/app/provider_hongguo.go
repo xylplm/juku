@@ -17,13 +17,20 @@ import (
 const hongguoBaseURL = "https://hongguoduanju.com"
 
 func (d *Downloader) fetchHongguoDramas(ctx context.Context) ([]Drama, error) {
+	return d.fetchHongguoCategoryDramas(ctx, "")
+}
+
+func (d *Downloader) fetchHongguoCategoryDramas(ctx context.Context, category string) ([]Drama, error) {
 	initialized := hongguoCatalogInitialized(d.hongguoCatalogSnapshot())
-	dramas, appErr := d.fetchHongguoAppCatalog(ctx)
+	dramas, appErr := d.fetchHongguoAppCatalogCategory(ctx, category)
 	if len(dramas) > 0 || appErr == nil && initialized {
 		return dramas, appErr
 	}
 	if ctx.Err() != nil {
 		return dramas, ctx.Err()
+	}
+	if category != "" && category != "short_play" {
+		return dramas, appErr
 	}
 	webDramas, webErr := d.fetchHongguoWebDramas(ctx)
 	if len(webDramas) > 0 && webErr == nil {

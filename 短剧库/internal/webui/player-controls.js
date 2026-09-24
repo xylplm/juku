@@ -180,6 +180,7 @@
     window.addEventListener('pagehide', reset);
     panel.addEventListener('close', reset);
     panel.addEventListener('jukuorientationchange', reset);
+    panel.addEventListener('jukufullscreenchange', reset);
     return {reset};
   };
 })();

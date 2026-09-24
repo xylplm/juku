@@ -22,25 +22,29 @@ type hlsAsset struct {
 	remote    string
 	body      []byte
 	playlist  bool
+	fallbacks []hlsAsset
 }
 
 type hlsProxy struct {
-	client     *http.Client
-	server     *http.Server
-	base       string
-	referer    string
-	key        []byte
-	mediaKey   []byte
-	mu         sync.Mutex
-	assets     map[string]hlsAsset
-	assetIDs   map[string]string
-	failure    error
-	root       string
-	retries    int
-	host       string
-	diagnostic func(diagnosticEvent)
-	query      string
-	acquire    func(context.Context) (func(), error)
+	downloader  *Downloader
+	credentials *providerMediaCredentials
+	client      *http.Client
+	server      *http.Server
+	base        string
+	referer     string
+	key         []byte
+	mediaKey    []byte
+	mu          sync.Mutex
+	assets      map[string]hlsAsset
+	assetIDs    map[string]string
+	failure     error
+	root        string
+	retries     int
+	host        string
+	diagnostic  func(diagnosticEvent)
+	query       string
+	acquire     func(context.Context) (func(), error)
+	cache       *downloadMediaCache
 }
 
 var hlsURIAttribute = regexp.MustCompile(`URI="([^"]+)"`)
@@ -55,15 +59,17 @@ func (d *Downloader) newHLSProxy(ctx context.Context, media providerMedia, key [
 		return nil, fmt.Errorf("创建本地 HLS 转发失败: %w", err)
 	}
 	proxy := &hlsProxy{
-		client:     &http.Client{Transport: d.client.Transport},
-		base:       "http://" + listener.Addr().String() + "/" + nonce + "/",
-		referer:    media.Referer,
-		key:        key,
-		mediaKey:   media.HLSKey,
-		assets:     map[string]hlsAsset{},
-		assetIDs:   map[string]string{},
-		retries:    d.cfg.Retries,
-		diagnostic: d.recordDiagnostic,
+		downloader:  d,
+		credentials: media.credentials,
+		client:      &http.Client{Transport: d.client.Transport, Jar: d.client.Jar, CheckRedirect: d.client.CheckRedirect},
+		base:        "http://" + listener.Addr().String() + "/" + nonce + "/",
+		referer:     media.Referer,
+		key:         key,
+		mediaKey:    media.HLSKey,
+		assets:      map[string]hlsAsset{},
+		assetIDs:    map[string]string{},
+		retries:     d.cfg.Retries,
+		diagnostic:  d.recordDiagnostic,
 	}
 	if remote, err := url.Parse(media.URL); err == nil {
 		proxy.host = remote.Hostname()
@@ -84,6 +90,9 @@ func (d *Downloader) newHLSProxy(ctx context.Context, media providerMedia, key [
 
 func playbackRootAsset(media providerMedia) hlsAsset {
 	asset := hlsAsset{remote: media.URL, body: []byte(media.Playlist), playlist: media.Playlist != ""}
+	for _, fallback := range mediaFallbackVariants(media) {
+		asset.fallbacks = append(asset.fallbacks, hlsAsset{remote: fallback.URL, body: []byte(fallback.Playlist), playlist: fallback.Playlist != ""})
+	}
 	if asset.playlist && !strings.Contains(media.Playlist, "#EXT-X-ENDLIST") && !strings.Contains(media.Playlist, "#EXT-X-STREAM-INF:") {
 		asset.body = nil
 	}
@@ -267,23 +276,62 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		if asset.playlist {
 			method = http.MethodGet
 		}
-		upstream, err := http.NewRequestWithContext(request.Context(), method, asset.remote, nil)
-		if err != nil {
-			proxy.fail(writer, request, err)
-			return
+		buildRequest := func(candidate hlsAsset) (*http.Request, error) {
+			upstream, err := http.NewRequestWithContext(request.Context(), method, candidate.remote, nil)
+			if err != nil {
+				return nil, err
+			}
+			upstream.Header.Set("User-Agent", userAgent)
+			upstream.Header.Set("Referer", proxy.referer)
+			upstream.Header.Set("Accept-Encoding", "identity")
+			if origin, err := url.Parse(proxy.referer); err == nil && origin.Host != "" {
+				upstream.Header.Set("Origin", origin.Scheme+"://"+origin.Host)
+			}
+			for _, header := range []string{"Range", "If-Range"} {
+				if value := request.Header.Get(header); value != "" && !candidate.playlist {
+					upstream.Header.Set(header, value)
+				}
+			}
+			return upstream, nil
 		}
-		upstream.Header.Set("User-Agent", userAgent)
-		upstream.Header.Set("Referer", proxy.referer)
-		upstream.Header.Set("Accept-Encoding", "identity")
-		if origin, err := url.Parse(proxy.referer); err == nil && origin.Host != "" {
-			upstream.Header.Set("Origin", origin.Scheme+"://"+origin.Host)
-		}
-		for _, header := range []string{"Range", "If-Range"} {
-			if value := request.Header.Get(header); value != "" && !asset.playlist {
-				upstream.Header.Set(header, value)
+		candidates := append([]hlsAsset{asset}, asset.fallbacks...)
+		if proxy.cache != nil && !asset.playlist && request.Method == http.MethodGet && request.Header.Get("Range") == "" {
+			for _, candidate := range candidates {
+				file, size, cacheErr := proxy.cache.open(request.Context(), proxy, candidate, buildRequest)
+				if cacheErr == nil {
+					defer file.Close()
+					if contentType := hlsAssetContentType(candidate.extension); contentType != "" {
+						writer.Header().Set("Content-Type", contentType)
+					}
+					writer.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+					http.ServeContent(writer, request, "media", time.Time{}, file)
+					return
+				}
 			}
 		}
-		response, err := proxy.fetch(upstream)
+		var upstream *http.Request
+		var response *http.Response
+		var err error
+		for index, candidate := range candidates {
+			upstream, err = buildRequest(candidate)
+			if err != nil {
+				break
+			}
+			response, err = proxy.fetch(upstream)
+			if err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+				asset = candidate
+				break
+			}
+			if response != nil {
+				if response.StatusCode == http.StatusRequestedRangeNotSatisfiable || response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden && response.StatusCode != http.StatusNotFound && response.StatusCode != http.StatusGone {
+					break
+				}
+				_ = response.Body.Close()
+			}
+			if index == len(candidates)-1 {
+				break
+			}
+		}
 		if err != nil {
 			proxy.fail(writer, request, err)
 			return
@@ -354,6 +402,7 @@ func (proxy *hlsProxy) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 }
 
 func (proxy *hlsProxy) fetch(request *http.Request) (*http.Response, error) {
+	request = request.Clone(providerMediaContext(request.Context(), proxy.credentials))
 	attempts := mediaRequestAttempts(proxy.retries)
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -366,7 +415,22 @@ func (proxy *hlsProxy) fetch(request *http.Request) (*http.Response, error) {
 				return nil, request.Context().Err()
 			}
 		}
-		response, err := proxy.client.Do(request.Clone(request.Context()))
+		var response *http.Response
+		var err error
+		if proxy.downloader != nil {
+			response, err = proxy.downloader.doMediaRequestWithClient(request.Clone(request.Context()), proxy.client)
+		} else {
+			upstream := request.Clone(request.Context())
+			mediaRequestHeaders(upstream, proxy.referer)
+			client := proxy.client
+			if proxy.credentials != nil {
+				if err := proxy.credentials.apply(upstream); err != nil {
+					return nil, err
+				}
+				client = proxy.credentials.client(client)
+			}
+			response, err = client.Do(upstream)
+		}
 		if err == nil {
 			return response, nil
 		}

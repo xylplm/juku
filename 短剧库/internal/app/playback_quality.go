@@ -53,16 +53,28 @@ func setPlaybackQualityHeaders(header http.Header, media providerMedia) {
 }
 
 func (downloader *Downloader) selectPlaybackQuality(ctx context.Context, media providerMedia) (providerMedia, error) {
+	ctx = providerMediaContext(ctx, media.credentials)
 	requested, _ := ctx.Value(playbackQualityKey{}).(int)
 	if requested > 0 {
 		for _, variant := range media.Variants {
-			if variant.Quality == requested {
+			if variant.Quality == requested && isProviderHTTPMediaURL(variant.URL) {
+				if variant.credentials == nil {
+					variant.credentials = media.credentials
+				}
+				variant.Referer = firstNonEmpty(variant.Referer, media.Referer)
 				variant.Variants = media.Variants
+				if address, err := url.Parse(variant.URL); err == nil && strings.HasSuffix(strings.ToLower(address.Path), ".m3u8") && variant.Playlist == "" {
+					variant, err = downloader.fetchMediaPlaylistForMedia(ctx, variant)
+					if err != nil {
+						return providerMedia{}, err
+					}
+				}
 				media = variant
 				break
 			}
 		}
 	}
+	ctx = providerMediaContext(ctx, media.credentials)
 	lines := strings.Split(media.Playlist, "\n")
 	variants := playbackHLSVariants(media.Playlist)
 	if len(variants) == 0 {
@@ -89,7 +101,7 @@ func (downloader *Downloader) selectPlaybackQuality(ctx context.Context, media p
 	if !isProviderHTTPMediaURL(address) {
 		return providerMedia{}, errors.New("清晰度播放列表地址无效")
 	}
-	playlist, err := downloader.fetchProviderText(ctx, address, media.Referer)
+	playlist, _, err := downloader.fetchMediaPlaylist(ctx, address, media.Referer)
 	if err != nil {
 		return providerMedia{}, err
 	}

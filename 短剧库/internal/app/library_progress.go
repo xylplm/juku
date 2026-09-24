@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -12,11 +13,21 @@ type librarySourceState struct {
 	Status    string    `json:"status"`
 	Count     int       `json:"count"`
 	Error     string    `json:"error,omitempty"`
+	Phase     string    `json:"phase,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+func (state librarySourceState) withPhase(phase string) librarySourceState {
+	phase = strings.TrimSpace(phase)
+	if state.Status == "loading" {
+		state.Phase = phase
+	}
+	return state
+}
+
 type libraryProgressKey struct{}
-type libraryProgressFunc func(string, []Drama, error, bool)
+type libraryCategoryKey struct{}
+type libraryProgressFunc func(string, string, []Drama, error, bool) error
 
 type libraryLoadMode int
 
@@ -26,17 +37,54 @@ const (
 	libraryLoadUpdate
 )
 
-func reportLibraryProgress(ctx context.Context, source string, items []Drama, err error, done bool) {
+func reportLibraryProgress(ctx context.Context, source string, items []Drama, err error, done bool) error {
 	if callback, ok := ctx.Value(libraryProgressKey{}).(libraryProgressFunc); ok && (done || len(items) > 0) {
-		callback(source, items, err, done)
+		category, _ := ctx.Value(libraryCategoryKey{}).(string)
+		return callback(source, category, items, err, done)
+	}
+	return nil
+}
+
+func (a *UIApp) setLibraryPhaseLocked(phase string) {
+	phase = strings.TrimSpace(phase)
+	a.libraryLoadingPhase = phase
+	if a.librarySources == nil {
+		a.librarySources = map[string]librarySourceState{}
+	}
+	for source, state := range a.librarySources {
+		if state.Status == "loading" {
+			a.librarySources[source] = state.withPhase(phase)
+		}
 	}
 }
 
-func (a *UIApp) startLibraryRefreshLocked(source string) {
-	a.startLibraryLoadLocked(source, libraryLoadRefresh, nil)
+func (a *UIApp) handleLibraryCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	a.mu.Lock()
+	cancel := a.libraryCancel
+	running := a.libraryLoading != nil
+	if running {
+		a.setLibraryPhaseLocked("正在停止，已保留已入库内容")
+		a.libraryRevision++
+	}
+	resp := a.librarySnapshotForSourceLocked(r.Context(), 0)
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	resp["canceled"] = running
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (a *UIApp) startLibraryLoadLocked(source string, mode libraryLoadMode, priority []string, scopes ...context.Context) {
+func (a *UIApp) startLibraryRefreshLocked(source string) {
+	a.startLibraryLoadLocked(source, libraryLoadRefresh, nil, "")
+}
+
+func (a *UIApp) startLibraryLoadLocked(source string, mode libraryLoadMode, priority []string, category string, scopes ...context.Context) {
+	category = strings.TrimSpace(category)
 	base := context.Background()
 	if len(scopes) > 0 && sourceScope(scopes[0]) != nil {
 		base = context.WithValue(base, accountSourceContextKey{}, sourceScope(scopes[0]))
@@ -52,24 +100,32 @@ func (a *UIApp) startLibraryLoadLocked(source string, mode libraryLoadMode, prio
 	}
 	more := mode == libraryLoadMore
 	if more {
-		if !matchesSourceFilter(sourceHongguo, source) || !hongguoCatalogHasMore(a.libraryApp) {
+		hasMore := matchesSourceFilter(sourceHongguo, source) && sourceAllowed(base, sourceHongguo) && hongguoCatalogCategoryHasMore(a.libraryApp, category)
+		for provider, cursor := range a.libraryProviders {
+			if providerCatalogSource(provider) == provider {
+				hasMore = hasMore || matchesSourceFilter(provider, source) && sourceAllowed(base, provider) && cursor.Initialized && !cursor.Exhausted
+			}
+		}
+		if !hasMore {
 			return
 		}
-		source = sourceHongguo
 	}
 	previousCount := len(a.dramas)
 	a.libraryAttempted = true
 	a.libraryLoading = make(chan struct{})
 	a.libraryMore = more
 	a.libraryLoadingSource = source
+	a.libraryLoadingPhase = "等待开始"
+	a.libraryLoadingCategory = category
 	if a.librarySources == nil {
 		a.librarySources = map[string]librarySourceState{}
 	}
-	for _, provider := range []string{"cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo} {
+	for _, provider := range []string{"cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD} {
 		if matchesSourceFilter(provider, source) && sourceAllowed(base, provider) {
 			state := a.librarySources[provider]
 			state.Status = "loading"
 			state.Error = ""
+			state.Phase = "等待开始"
 			a.librarySources[provider] = state
 		}
 	}
@@ -79,24 +135,49 @@ func (a *UIApp) startLibraryLoadLocked(source string, mode libraryLoadMode, prio
 	ctx = context.WithValue(ctx, libraryProgressKey{}, libraryProgressFunc(a.acceptLibraryProgress))
 	ctx = context.WithValue(ctx, libraryMoreKey{}, more)
 	ctx = context.WithValue(ctx, libraryUpdateKey{}, mode == libraryLoadUpdate)
+	if category != "" {
+		ctx = context.WithValue(ctx, libraryCategoryKey{}, category)
+	}
 	ctx = withKnownHongguoDramas(ctx, a.dramas)
 	go func() {
 		defer cancel()
-		if more {
-			items, err := a.downloader.fetchHongguoDramas(ctx)
-			reportLibraryProgress(ctx, sourceHongguo, items, err, true)
+		var loadErr error
+		a.mu.Lock()
+		a.setLibraryPhaseLocked("保存当前剧库")
+		a.libraryRevision++
+		a.mu.Unlock()
+		if err := a.persistLibraryIfDirty(); err != nil {
+			loadErr = err
+		} else if more {
+			a.mu.Lock()
+			a.setLibraryPhaseLocked("继续加载目录")
+			a.libraryRevision++
+			a.mu.Unlock()
+			_, loadErr = a.downloader.fetchMoreLibrary(ctx, source)
 		} else {
-			_, _ = a.downloader.fetchAllDramas(ctx, source)
+			a.mu.Lock()
+			a.setLibraryPhaseLocked("读取站源目录")
+			a.libraryRevision++
+			a.mu.Unlock()
+			_, loadErr = a.downloader.fetchAllDramas(ctx, source)
 		}
 		a.mu.Lock()
+		if ctx.Err() == context.Canceled {
+			loadErr = nil
+			a.markLibrarySourcesCanceledLocked(base, source)
+		} else if loadErr != nil && a.libraryLoading != nil {
+			a.markLibrarySourcesFailedLocked(base, source, loadErr)
+		}
 		a.libraryDirty = true
 		a.libraryRevision++
 		a.mu.Unlock()
-		a.persistLibrary()
+		_ = a.persistLibrary()
 		a.mu.Lock()
 		close(a.libraryLoading)
 		a.libraryLoading = nil
 		a.libraryCancel = nil
+		a.libraryLoadingPhase = ""
+		a.libraryLoadingCategory = ""
 		a.libraryRevision++
 		count := len(a.dramas)
 		a.mu.Unlock()
@@ -104,15 +185,75 @@ func (a *UIApp) startLibraryLoadLocked(source string, mode libraryLoadMode, prio
 	}()
 }
 
-func (a *UIApp) acceptLibraryProgress(source string, items []Drama, loadErr error, done bool) {
+func (a *UIApp) persistLibraryIfDirty() error {
+	a.mu.Lock()
+	dirty := a.libraryDirty
+	a.mu.Unlock()
+	if !dirty {
+		return nil
+	}
+	return a.persistLibrary()
+}
+
+func (a *UIApp) markLibrarySourcesFailedLocked(ctx context.Context, source string, err error) {
+	if a.librarySources == nil {
+		a.librarySources = map[string]librarySourceState{}
+	}
+	for _, provider := range []string{"cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD} {
+		if !matchesSourceFilter(provider, source) || !sourceAllowed(ctx, provider) {
+			continue
+		}
+		state := a.librarySources[provider]
+		if state.Status == "loading" {
+			state.Status = "failed"
+			if state.Count > 0 {
+				state.Status = "partial"
+			}
+			state.Error = a.redactError(err)
+			state.Phase = ""
+			a.librarySources[provider] = state
+		}
+	}
+	a.libraryError = librarySourceErrors(a.librarySources)
+}
+
+func (a *UIApp) markLibrarySourcesCanceledLocked(ctx context.Context, source string) {
+	if a.librarySources == nil {
+		a.librarySources = map[string]librarySourceState{}
+	}
+	for _, provider := range []string{"cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD} {
+		if !matchesSourceFilter(provider, source) || !sourceAllowed(ctx, provider) {
+			continue
+		}
+		state := a.librarySources[provider]
+		if state.Status == "loading" {
+			state.Status = "canceled"
+			state.Error = ""
+			state.Phase = ""
+			a.librarySources[provider] = state
+		}
+	}
+	a.libraryError = librarySourceErrors(a.librarySources)
+}
+
+func (a *UIApp) acceptLibraryProgress(source, category string, items []Drama, loadErr error, done bool) error {
 	a.mu.Lock()
 	items = append([]Drama(nil), items...)
 	a.normalizeDramaCovers(items)
 	newDramas := a.newSortMetadataDramasLocked(items)
-	if done {
-		if source == sourceHongguo {
-			a.libraryApp = a.downloader.hongguoCatalogSnapshot()
+	if source == sourceHongguo {
+		a.libraryApp = a.downloader.hongguoCatalogSnapshot()
+	}
+	if paginatedProvider(source) {
+		if a.libraryProviders == nil {
+			a.libraryProviders = map[string]providerCatalogCursor{}
 		}
+		key := providerCatalogKey(source, category)
+		if cursor, exists := a.downloader.providerCatalogSnapshot()[key]; exists {
+			a.libraryProviders[key] = cursor
+		}
+	}
+	if done {
 		var mergeErr error
 		if loadErr != nil {
 			mergeErr = &libraryLoadError{failures: map[string]error{source: loadErr}}
@@ -156,19 +297,21 @@ func (a *UIApp) acceptLibraryProgress(source string, items []Drama, loadErr erro
 			}
 			state.Error = a.redactError(loadErr)
 		}
+		state.Phase = ""
 	}
 	a.librarySources[source] = state
 	a.libraryError = librarySourceErrors(a.librarySources)
 	a.libraryDirty = true
 	a.libraryRevision++
-	persist := done || time.Since(a.libraryLastSave) >= 3*time.Second
+	persist := done || len(items) > 0 && (source == sourceHongguo || paginatedProvider(source)) || time.Since(a.libraryLastSave) >= 3*time.Second
 	if persist {
 		a.libraryLastSave = time.Now()
 	}
 	a.mu.Unlock()
 	if persist {
-		a.persistLibrary()
+		return a.persistLibrary()
 	}
+	return nil
 }
 
 func librarySourceErrors(sources map[string]librarySourceState) string {
@@ -190,11 +333,11 @@ func cloneLibrarySources(sources map[string]librarySourceState) map[string]libra
 	return copy
 }
 
-func (a *UIApp) persistLibrary() {
+func (a *UIApp) persistLibrary() error {
 	a.libraryWriteMu.Lock()
 	defer a.libraryWriteMu.Unlock()
 	a.mu.Lock()
-	cache := libraryCache{Dramas: append([]Drama{}, a.dramas...), LoadedAt: a.loadedAt, LastError: librarySourceErrors(a.librarySources), Sources: cloneLibrarySources(a.librarySources), HongguoApp: cloneHongguoCatalogState(a.libraryApp)}
+	cache := libraryCache{Dramas: append([]Drama{}, a.dramas...), LoadedAt: a.loadedAt, LastError: librarySourceErrors(a.librarySources), Sources: cloneLibrarySources(a.librarySources), HongguoApp: cloneHongguoCatalogState(a.libraryApp), ProviderCatalog: cloneProviderCatalog(a.libraryProviders)}
 	revision := a.libraryRevision
 	a.mu.Unlock()
 	err := writeLibraryCache(a.cfg.dataDirectory(), cache)
@@ -203,12 +346,13 @@ func (a *UIApp) persistLibrary() {
 	if err != nil {
 		a.libraryError = strings.TrimSpace(cache.LastError + "\n剧库缓存保存失败: " + a.redactError(err))
 		a.libraryRevision++
-		return
+		return err
 	}
 	a.librarySaved = true
 	if revision == a.libraryRevision {
 		a.libraryDirty = false
 	}
+	return nil
 }
 
 func (a *UIApp) librarySnapshotLocked(revision uint64) map[string]any {
@@ -225,12 +369,17 @@ func (a *UIApp) librarySnapshotLocked(revision uint64) map[string]any {
 	}
 	more["hongguo"] = more["hongguo"] || hongguoCatalogHasMore(a.libraryApp)
 	more[""] = more[""] || more["hongguo"]
+	for source, cursor := range a.libraryProviders {
+		base := providerCatalogSource(source)
+		more[base] = more[base] || cursor.Initialized && !cursor.Exhausted
+		more[""] = more[""] || more[base]
+	}
 	response := map[string]any{
 		"revision": a.libraryRevision, "loadedAt": a.loadedAt, "loading": a.libraryLoading != nil,
 		"cached": a.librarySaved && !a.libraryDirty, "error": a.libraryError,
 		"sources": cloneLibrarySources(a.librarySources), "total": len(a.dramas),
-		"hasMore": more["hongguo"], "hasMoreBySource": more, "metadataRemaining": remaining,
-		"loadingMore": a.libraryMore && a.libraryLoading != nil, "loadingSource": a.libraryLoadingSource, "metadata": a.libraryMetadata,
+		"hasMore": more[""], "hasMoreBySource": more, "metadataRemaining": remaining,
+		"loadingMore": a.libraryMore && a.libraryLoading != nil, "loadingSource": a.libraryLoadingSource, "loadingPhase": a.libraryLoadingPhase, "metadata": a.libraryMetadata,
 	}
 	if revision != 0 && revision == a.libraryRevision {
 		response["unchanged"] = true

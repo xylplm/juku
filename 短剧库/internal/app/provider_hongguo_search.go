@@ -48,7 +48,7 @@ func reportHongguoSearchProgress(ctx context.Context, entry hongguoSearchEntry) 
 }
 
 func hongguoSearchKeyword(keyword string) (string, error) {
-	keyword = strings.TrimSpace(keyword)
+	keyword = norm.NFKC.String(strings.TrimSpace(keyword))
 	if keyword == "" || !utf8.ValidString(keyword) || utf8.RuneCountInString(keyword) > 80 || strings.IndexFunc(keyword, unicode.IsControl) >= 0 {
 		return "", errors.New("请输入 1 至 80 个字符的搜索词")
 	}
@@ -138,6 +138,16 @@ func (downloader *Downloader) waitHongguoSearch(ctx context.Context, pending *ho
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				client.mu.Lock()
+				partial := cloneHongguoSearchEntry(pending.snapshot)
+				client.mu.Unlock()
+				if len(partial.Dramas) > 0 {
+					partial.Limited = true
+					partial.Warning = "搜索已到时限，已保留收到的结果，可重试"
+					return partial, nil
+				}
+			}
 			return hongguoSearchEntry{}, ctx.Err()
 		case <-pending.done:
 			return cloneHongguoSearchEntry(pending.entry), pending.err
@@ -150,14 +160,17 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 
 	names, namesErr := downloader.fetchHongguoSearchNames(ctx, keyword)
 	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && len(names) > 0 {
+			return hongguoSearchEntry{Dramas: names, Total: len(names), Limited: true, Warning: "搜索已到时限，已保留名称匹配结果，可重试"}, nil
+		}
 		return hongguoSearchEntry{}, err
 	}
 	reportHongguoSearchProgress(ctx, hongguoSearchEntry{Dramas: mergeHongguoSearchDramas([]Drama{}, names), Limited: true})
 	pageCtx, cancel := context.WithTimeout(ctx, hongguoSearchPageTimeout)
 	defer cancel()
 	page, pageErr := downloader.fetchHongguoSearchPage(pageCtx, keyword)
-	if err := ctx.Err(); err != nil {
-		return hongguoSearchEntry{}, err
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return hongguoSearchEntry{}, ctx.Err()
 	}
 	if pageErr != nil && namesErr != nil || len(page.Dramas)+len(names) == 0 && (pageErr != nil || namesErr != nil) {
 		return hongguoSearchEntry{}, errors.Join(pageErr, namesErr)
@@ -168,13 +181,11 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 	}
 	reportHongguoSearchProgress(ctx, entry)
 	seasonsLimited := downloader.completeHongguoSearchSeasons(ctx, keyword, &entry)
-	if err := ctx.Err(); err != nil {
-		return hongguoSearchEntry{}, err
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return hongguoSearchEntry{}, ctx.Err()
 	}
-	query := hongguoSearchText(keyword)
-	sort.SliceStable(entry.Dramas, func(left, right int) bool {
-		return hongguoTitleSearchRank(entry.Dramas[left].DisplayTitle(), query) < hongguoTitleSearchRank(entry.Dramas[right].DisplayTitle(), query)
-	})
+	seasonsLimited = seasonsLimited || errors.Is(ctx.Err(), context.DeadlineExceeded)
+	sortHongguoSearchDramas(entry.Dramas, keyword)
 	if pageErr != nil {
 		entry.Warning = "红果综合搜索暂不可用，已保留名称匹配结果，可重试"
 	} else if namesErr != nil {
@@ -191,6 +202,39 @@ func (downloader *Downloader) fetchHongguoSearch(ctx context.Context, keyword st
 		entry.Total = len(entry.Dramas)
 	}
 	return entry, nil
+}
+
+func sortHongguoSearchDramas(dramas []Drama, query string) {
+	sort.SliceStable(dramas, func(i, j int) bool {
+		return hongguoTitleSearchRank(dramas[i].DisplayTitle(), query) < hongguoTitleSearchRank(dramas[j].DisplayTitle(), query)
+	})
+	type family struct {
+		rank int
+		base string
+		unit string
+	}
+	type seasonEntry struct {
+		drama  Drama
+		number int
+	}
+	positions := map[family][]int{}
+	entries := map[family][]seasonEntry{}
+	for index, drama := range dramas {
+		title := drama.DisplayTitle()
+		base, number, unit, _ := hongguoSearchSeason(title)
+		if number < 1 {
+			continue
+		}
+		key := family{hongguoTitleSearchRank(title, query), hongguoSearchText(base), unit}
+		positions[key] = append(positions[key], index)
+		entries[key] = append(entries[key], seasonEntry{drama, number})
+	}
+	for key, group := range entries {
+		sort.SliceStable(group, func(i, j int) bool { return group[i].number < group[j].number })
+		for index, entry := range group {
+			dramas[positions[key][index]] = entry.drama
+		}
+	}
 }
 
 func mergeHongguoSearchDramas(dramas, batch []Drama) []Drama {
@@ -253,6 +297,8 @@ func hongguoSearchText(text string) string {
 }
 
 func hongguoTitleSearchRank(title, query string) int {
+	words := strings.FieldsFunc(norm.NFKC.String(query), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
+	query = hongguoSearchText(query)
 	title = hongguoSearchText(title)
 	switch {
 	case title == query:
@@ -262,7 +308,16 @@ func hongguoTitleSearchRank(title, query string) int {
 	case strings.Contains(title, query):
 		return 2
 	default:
-		return 3
+		matches := 0
+		for _, word := range words {
+			if strings.Contains(title, hongguoSearchText(word)) {
+				matches++
+			}
+		}
+		if len(words) > 0 && matches == len(words) {
+			return 3
+		}
+		return 4
 	}
 }
 

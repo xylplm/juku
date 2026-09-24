@@ -63,13 +63,12 @@ func newFollowingStore(directory string) *followingStore {
 		return store
 	}
 	for _, entry := range saved.Entries {
-		id, source, valid := playbackHistoryIdentity(entry.DramaID)
-		if !valid || canonicalProviderSource(entry.Source) != source || len(entry.Title) > 4096 || len(entry.Category) > 512 || entry.KnownEpisodes < 0 || entry.KnownEpisodes > 10000 || entry.AddedAt.IsZero() || entry.UpdatedAt.IsZero() || !entry.Saved && !entry.Completed {
+		entry, valid := normalizeFollowingEntry(entry)
+		if !valid {
 			continue
 		}
-		entry.DramaID, entry.Source = id, source
-		if old, exists := store.entries[id]; !exists || entry.UpdatedAt.After(old.UpdatedAt) {
-			store.entries[id] = entry
+		if old, exists := store.entries[entry.DramaID]; !exists || entry.UpdatedAt.After(old.UpdatedAt) {
+			store.entries[entry.DramaID] = entry
 		}
 	}
 	return store
@@ -87,6 +86,15 @@ func followingEntries(entries map[string]followingEntry) []followingEntry {
 		return result[i].UpdatedAt.After(result[j].UpdatedAt)
 	})
 	return result
+}
+
+func normalizeFollowingEntry(entry followingEntry) (followingEntry, bool) {
+	id, source, valid := playbackHistoryIdentity(entry.DramaID)
+	if !valid || canonicalProviderSource(entry.Source) != source || len(entry.Title) > 4096 || len(entry.Category) > 512 || entry.KnownEpisodes < 0 || entry.KnownEpisodes > 10000 || entry.AddedAt.IsZero() || entry.UpdatedAt.IsZero() || !entry.Saved && !entry.Completed {
+		return followingEntry{}, false
+	}
+	entry.DramaID, entry.Source = id, source
+	return entry, true
 }
 
 func (store *followingStore) list() ([]followingEntry, error) {
@@ -123,6 +131,44 @@ func (store *followingStore) update(id string, change func(followingEntry, bool)
 	}
 	store.entries = next
 	return entry, nil
+}
+
+func (store *followingStore) merge(entries []followingEntry) (int, int, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.loadErr != nil {
+		return 0, 0, store.loadErr
+	}
+	next := make(map[string]followingEntry, len(store.entries)+len(entries))
+	for id, entry := range store.entries {
+		next[id] = entry
+	}
+	imported := 0
+	skipped := 0
+	for _, entry := range entries {
+		entry, valid := normalizeFollowingEntry(entry)
+		if !valid {
+			continue
+		}
+		current, exists := next[entry.DramaID]
+		if exists && !entry.UpdatedAt.After(current.UpdatedAt) {
+			continue
+		}
+		if !exists && len(next) >= followingLimit {
+			skipped++
+			continue
+		}
+		next[entry.DramaID] = entry
+		imported++
+	}
+	if imported == 0 {
+		return 0, skipped, nil
+	}
+	if err := store.write(followingFile{Version: 1, Entries: followingEntries(next)}); err != nil {
+		return 0, skipped, err
+	}
+	store.entries = next
+	return imported, skipped, nil
 }
 
 func (store *followingStore) write(data followingFile) error {

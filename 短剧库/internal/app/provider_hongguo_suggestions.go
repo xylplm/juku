@@ -166,10 +166,19 @@ func (d *Downloader) fetchHongguoSuggestionRecords(ctx context.Context, query st
 	}
 	var result struct {
 		Items []hongguoSuggestionRecord `json:"suggest_list"`
+		Data  struct {
+			Items []hongguoSuggestionRecord `json:"suggest_list"`
+		} `json:"data"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.UseNumber()
-	if err := decoder.Decode(&result); err != nil || result.Items == nil {
+	if err := decoder.Decode(&result); err != nil {
+		return nil, errors.New("红果搜索联想未返回有效数据")
+	}
+	if result.Items == nil {
+		result.Items = result.Data.Items
+	}
+	if result.Items == nil {
 		return nil, errors.New("红果搜索联想未返回有效数据")
 	}
 	if decoder.Decode(new(any)) != io.EOF {

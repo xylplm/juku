@@ -54,7 +54,7 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = {plan, frames, lifetime, createClock};
   if (typeof document === 'undefined') return;
   const node = id => document.getElementById(id);
-  const video = node('onlineVideo'), stage = node('playbackStage'), layer = node('playbackDanmaku');
+  const video = node('onlineVideo'), layer = node('playbackDanmaku');
   const control = node('danmakuControl'), enabled = node('danmakuEnabled'), status = node('danmakuStatus');
   let session = '', episode = 0, supported = false, ready = false, generation = 0;
   let pages = new Map(), failures = new Map(), schedule = [], elements = new Map();
@@ -62,7 +62,7 @@
   let waiting = false;
   const clock = createClock();
   const measure = document.createElement('canvas').getContext('2d');
-  try {enabled.checked = localStorage.getItem('juku-danmaku-enabled') !== 'false';} catch (_) {}
+  enabled.checked = window.JukuPreferences?.read('danmaku.enabled', true) !== false;
 
   function clearLayer() {
     for (const item of elements.values()) item.motion?.cancel();
@@ -107,8 +107,6 @@
 
   function close() {
     setEpisode('', 0, false);
-    if (document.fullscreenElement === stage) document.exitFullscreen().catch(() => {});
-    else if (document.webkitFullscreenElement === stage && document.webkitExitFullscreen) document.webkitExitFullscreen();
   }
 
   function rebuild() {
@@ -248,7 +246,7 @@
   video.addEventListener('seeking', () => {cancelRequest(); clearLayer(); update(true);});
   video.addEventListener('ended', suspend);
   enabled.addEventListener('change', () => {
-    try {localStorage.setItem('juku-danmaku-enabled', String(enabled.checked));} catch (_) {}
+    window.JukuPreferences?.save('danmaku.enabled', enabled.checked);
     cancelRequest();
     failures.clear();
     if (!enabled.checked) {cancelAnimationFrame(animation); animation = 0; clearLayer();}
@@ -263,20 +261,17 @@
   });
   if (window.ResizeObserver) new ResizeObserver(() => {rebuild(); draw(performance.now(), true);}).observe(layer);
   else window.addEventListener('resize', () => {rebuild(); draw(performance.now(), true);});
+  window.JukuPreferences?.onChange(event => {
+    if (!event.keys.includes('danmaku.enabled')) return;
+    const next = event.values['danmaku.enabled'] !== false;
+    if (enabled.checked === next) return;
+    enabled.checked = next;
+    cancelRequest();
+    failures.clear();
+    if (!next) {cancelAnimationFrame(animation); animation = 0; clearLayer();}
+    refreshStatus();
+    update(true);
+  });
 
-  const fullscreen = node('playerFullscreenBtn'), exit = node('exitPlayerFullscreenBtn');
-  const supportsFullscreen = Boolean(stage.requestFullscreen || stage.webkitRequestFullscreen);
-  fullscreen.hidden = !supportsFullscreen;
-  if (supportsFullscreen) video.setAttribute('controlslist', 'nofullscreen');
-  fullscreen.addEventListener('click', async () => {
-    try {
-      if (stage.requestFullscreen) await stage.requestFullscreen();
-      else stage.webkitRequestFullscreen();
-    } catch (_) {status.textContent = '浏览器未允许全屏';}
-  });
-  exit.addEventListener('click', () => {
-    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
-    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-  });
   window.JukuPlaybackDanmaku = {setEpisode, suspend, close};
 })();

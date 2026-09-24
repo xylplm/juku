@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "download": {
+    "directory": "短剧下载",
+    "concurrency": 2
+  },
+  "network": {
+    "proxy": "auto",
+    "requestConcurrency": 2,
+    "requestIntervalMs": 500
+  }
+}

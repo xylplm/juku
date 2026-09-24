@@ -40,6 +40,55 @@ async function importLegacyRecords() {
   }
 }
 
+async function exportViewerSyncPackage() {
+  const control = $('viewerSyncExportBtn');
+  control.disabled = true;
+  $('viewerImportStatus').textContent = '正在生成同步包…';
+  try {
+    const result = await api('/api/ui/sync/package');
+    const pack = result.package || result;
+    const text = JSON.stringify(pack, null, 2);
+    $('viewerSyncPackage').value = text;
+    const copied = await (navigator.clipboard?.writeText(text).then(() => true, () => false) || false);
+    $('viewerImportStatus').textContent = copied ? '同步包已生成并复制，可到另一台设备导入。' : '同步包已生成，可手动复制到另一台设备导入。';
+  } catch (error) {
+    $('viewerImportStatus').textContent = error.message;
+  } finally {
+    control.disabled = false;
+  }
+}
+
+async function importViewerSyncPackage() {
+  const control = $('viewerSyncImportBtn');
+  const raw = $('viewerSyncPackage').value.trim();
+  if (!raw) {
+    $('viewerImportStatus').textContent = '请先粘贴同步包 JSON。';
+    return;
+  }
+  let pack;
+  try {
+    pack = JSON.parse(raw);
+  } catch (error) {
+    $('viewerImportStatus').textContent = '同步包 JSON 无效：' + error.message;
+    return;
+  }
+  control.disabled = true;
+  $('viewerImportStatus').textContent = '正在导入同步包…';
+  try {
+    const result = await post('/api/ui/sync/package', pack);
+    await Promise.all([window.JukuHistory.refresh(), app.following.refresh()]);
+    const notes = [];
+    if (result.historyRejected) notes.push('观看记录跳过 ' + result.historyRejected + ' 条');
+    if (result.followingRejected) notes.push('追剧跳过 ' + result.followingRejected + ' 条');
+    if (result.followingSkipped) notes.push('追剧超额跳过 ' + result.followingSkipped + ' 条');
+    $('viewerImportStatus').textContent = '已导入：观看记录 ' + (result.historyImported || 0) + ' 条，追剧 ' + (result.followingImported || 0) + ' 条' + (notes.length ? '；' + notes.join('，') : '。');
+  } catch (error) {
+    $('viewerImportStatus').textContent = error.message;
+  } finally {
+    control.disabled = false;
+  }
+}
+
 function init() {
   const admin = Boolean(app.viewer?.account?.admin && !app.viewer.account.requirePasswordChange);
   $('serverSettings').hidden = !admin;
@@ -49,6 +98,8 @@ function init() {
   $('legacyImportSection').hidden = !app.viewer?.legacyAvailable;
   $('viewerImportStatus').textContent = app.viewer?.legacyError || '';
   $('legacyImportBtn').addEventListener('click', importLegacyRecords);
+  $('viewerSyncExportBtn').addEventListener('click', exportViewerSyncPackage);
+  $('viewerSyncImportBtn').addEventListener('click', importViewerSyncPackage);
   $('browseDirectoryBtn').addEventListener('click', chooseDownloadDirectory);
   $('proxyMode').addEventListener('change', updateProxyFields);
   $('saveSettingsBtn').addEventListener('click', saveSettings);

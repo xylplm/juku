@@ -13,6 +13,9 @@ func (d *Downloader) fetchDramaMetadata(ctx context.Context, drama Drama) (Drama
 		return Drama{}, errors.New("无效的剧集 ID")
 	}
 	switch source {
+	case sourceHuangju, sourceYeguo, sourceDSD:
+		patch, _, err := d.fetchProviderDetail(ctx, source, id)
+		return patch, err
 	case sourceHongguo:
 		return d.fetchHongguoDramaMetadata(ctx, drama, id)
 	case sourceHuangdou:

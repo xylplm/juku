@@ -81,12 +81,15 @@ func splitProviderDramaID(id string) (source, sourceID string, ok bool) {
 	if !ok || strings.TrimSpace(sourceID) == "" || !isHuangguoProviderSource(source) {
 		return "", "", false
 	}
+	if source == sourceHuangju && !validHuangjuID(strings.TrimSpace(sourceID)) || (source == sourceYeguo || source == sourceDSD) && !webProviderNumericID.MatchString(strings.TrimSpace(sourceID)) {
+		return "", "", false
+	}
 	return source, strings.TrimSpace(sourceID), true
 }
 
 func isHuangguoProviderSource(source string) bool {
 	switch canonicalProviderSource(source) {
-	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo:
+	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD:
 		return true
 	default:
 		return false
@@ -103,6 +106,12 @@ func canonicalProviderSource(source string) string {
 		return sourceHuangdou
 	case "hongguo", "hongguoduanju.com":
 		return sourceHongguo
+	case "huangju", "huangju.net":
+		return sourceHuangju
+	case "yeguo", "ygdj7.com", "www.ygdj7.com", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com":
+		return sourceYeguo
+	case "dsd", "dsd.com.se":
+		return sourceDSD
 	default:
 		return strings.TrimSpace(source)
 	}
@@ -343,32 +352,70 @@ func (d *Downloader) fetchHuangguoVideoDramas(ctx context.Context) ([]Drama, err
 			out = append(out, dr)
 		}
 	}
-	pages := []string{strings.TrimRight(huangguoVideoBaseURL, "/") + "/videos"}
-	for category := 1; category <= 4; category++ {
-		pages = append(pages, fmt.Sprintf("%s/videos?category=%d", strings.TrimRight(huangguoVideoBaseURL, "/"), category))
+	maxPages := d.cfg.MaxPagesPerSort
+	if maxPages <= 0 {
+		maxPages = defaultConfig().MaxPagesPerSort
 	}
-	for _, pageURL := range pages {
-		body, err := d.fetchProviderText(ctx, pageURL, huangguoVideoBaseURL+"/")
-		if err != nil {
-			lastErr = err
-			var backoff *requestBackoff
-			if errors.As(err, &backoff) || ctx.Err() != nil {
+	for category := 0; category <= 4; category++ {
+		previousSignature := ""
+		for page := 1; page <= maxPages; page++ {
+			pageURL := huangguoVideoListURL(category, page)
+			body, err := d.fetchProviderText(ctx, pageURL, huangguoVideoBaseURL+"/")
+			if err != nil {
+				lastErr = err
+				var backoff *requestBackoff
+				if errors.As(err, &backoff) || ctx.Err() != nil {
+					return out, lastErr
+				}
 				break
 			}
-			continue
+			items := parseHuangguoVideoCards(body, pageURL)
+			if len(items) == 0 {
+				if category == 0 && page == 1 && len(out) == 0 {
+					lastErr = errors.New("黄果视频页面没有可识别的剧集内容，请检查站点是否返回验证页或页面结构已变化")
+					return nil, lastErr
+				}
+				break
+			}
+			signature := huangguoVideoListSignature(items)
+			if page > 1 && signature != "" && signature == previousSignature {
+				break
+			}
+			previousSignature = signature
+			add(items)
 		}
-		items := parseHuangguoVideoCards(body, pageURL)
-		if len(items) == 0 && len(out) == 0 {
-			lastErr = errors.New("黄果视频页面没有可识别的剧集内容，请检查站点是否返回验证页或页面结构已变化")
-			break
-		}
-		add(items)
 	}
 	if len(out) == 0 && lastErr != nil {
 		return nil, lastErr
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].DisplayTitle() < out[j].DisplayTitle() })
 	return out, lastErr
+}
+
+func huangguoVideoListURL(category, page int) string {
+	base := strings.TrimRight(huangguoVideoBaseURL, "/") + "/videos"
+	values := url.Values{}
+	if category > 0 {
+		values.Set("category", strconv.Itoa(category))
+	}
+	if page > 1 {
+		values.Set("page", strconv.Itoa(page))
+	}
+	if len(values) == 0 {
+		return base
+	}
+	return base + "?" + values.Encode()
+}
+
+func huangguoVideoListSignature(items []Drama) string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.ID != "" {
+			ids = append(ids, item.ID)
+		}
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, "\n")
 }
 
 func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID string) (string, []Chapter, error) {
@@ -381,6 +428,9 @@ func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID s
 		return d.fetchHuangdouChapters(ctx, sourceID)
 	case sourceHongguo:
 		return d.fetchHongguoChapters(ctx, sourceID)
+	case sourceHuangju, sourceYeguo, sourceDSD:
+		drama, chapters, err := d.fetchProviderDetail(ctx, canonicalProviderSource(source), sourceID)
+		return drama.DisplayTitle(), chapters, err
 	default:
 		return "", nil, fmt.Errorf("unsupported provider source: %s", source)
 	}
@@ -486,6 +536,9 @@ func (d *Downloader) fetchProviderTextURL(ctx context.Context, rawURL, referer s
 	if retries <= 0 {
 		retries = 3
 	}
+	if single, _ := ctx.Value(providerTextSingleAttemptKey{}).(bool); single {
+		retries = 1
+	}
 	if referer == "" {
 		referer = rawURL
 	}
@@ -518,6 +571,13 @@ func (d *Downloader) fetchProviderTextURL(ctx context.Context, rawURL, referer s
 				return "", "", err
 			}
 			req.Header.Set("User-Agent", userAgent)
+			if agent, _ := ctx.Value(providerTextUserAgentKey{}).(string); agent != "" {
+				req.Header.Set("User-Agent", agent)
+			}
+			if noCache, _ := ctx.Value(providerTextNoCacheKey{}).(bool); noCache {
+				req.Header.Set("Cache-Control", "no-cache")
+				req.Header.Set("Pragma", "no-cache")
+			}
 			if providerSourceForURL(rawURL) != "" {
 				req.Header.Set("Referer", providerRefererForURL(candidate, referer))
 			} else {
@@ -1002,7 +1062,7 @@ func (d *Downloader) resolveHuangguoVideoHLS(ctx context.Context, hlsURL, refere
 	if strings.HasSuffix(strings.ToLower(strings.SplitN(hlsURL, "?", 2)[0]), ".mp4") {
 		return hlsURL
 	}
-	body, finalURL, err := d.fetchProviderTextURL(ctx, hlsURL, referer)
+	body, finalURL, err := d.fetchMediaPlaylist(ctx, hlsURL, referer)
 	if err != nil {
 		return hlsURL
 	}
@@ -1508,13 +1568,7 @@ func (d *Downloader) downloadHuangguoProviderMediaWithProgress(ctx context.Conte
 	if callback != nil {
 		callback(DownloadProgress{Phase: "preparing"})
 	}
-	ffmpeg, err := d.ensureFFmpeg(ctx)
-	if err != nil {
-		return err
-	}
 	partPath := strings.TrimSuffix(task.OutPath, filepath.Ext(task.OutPath)) + ".part.mp4"
-	_ = os.Remove(partPath)
-	defer os.Remove(partPath)
 	if err := os.MkdirAll(filepath.Dir(task.OutPath), 0o755); err != nil {
 		return err
 	}
@@ -1556,10 +1610,31 @@ func (d *Downloader) downloadHuangguoProviderMediaWithProgress(ctx context.Conte
 		if len(media.CENCKey) != 0 && (len(media.CENCKey) != 16 || media.Playlist != "") {
 			return errors.New("CENC 媒体的密钥或格式无效")
 		}
+		if handled, directErr := d.downloadDirectProviderMedia(ctx, task, media, nil, progress); handled {
+			if directErr == nil {
+				return nil
+			}
+			lastErr = directErr
+			continue
+		}
+		ffmpeg, err := d.ensureFFmpeg(ctx)
+		if err != nil {
+			return err
+		}
+		_ = os.Remove(partPath)
 		progress.setMediaTotal(media.Duration)
 		proxy, err := d.newHLSProxy(ctx, media, nil)
 		if err != nil {
 			return err
+		}
+		if media.Playlist != "" {
+			if cache, cacheErr := prepareDownloadMediaCache(partPath+".segments", media, nil); cacheErr == nil {
+				proxy.cache = cache
+			} else {
+				proxy.Close()
+				lastErr = cacheErr
+				continue
+			}
 		}
 		inputURL := proxy.root
 		origin, _ := url.Parse(media.Referer)
@@ -1690,6 +1765,7 @@ func (d *Downloader) downloadHuangguoProviderMediaWithProgress(ctx context.Conte
 			lastErr = err
 			continue
 		}
+		_ = os.RemoveAll(partPath + ".segments")
 		progress.report("completed", true)
 		return nil
 	}

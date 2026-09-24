@@ -23,15 +23,17 @@ const viewerIdleCacheLimit = 64
 type viewerContextKey struct{}
 
 type viewerRecords struct {
-	id            string
-	directory     string
-	manager       *viewerManager
-	refs          int
-	used          time.Time
-	historyOnce   sync.Once
-	history       *playbackHistoryStore
-	followingOnce sync.Once
-	following     *followingStore
+	id              string
+	directory       string
+	manager         *viewerManager
+	refs            int
+	used            time.Time
+	historyOnce     sync.Once
+	history         *playbackHistoryStore
+	followingOnce   sync.Once
+	following       *followingStore
+	preferencesOnce sync.Once
+	preferences     *viewerPreferenceStore
 }
 
 type viewerManager struct {
@@ -216,7 +218,7 @@ func writeViewerError(writer http.ResponseWriter, status int, code, message stri
 func (app *UIApp) withBrowserViewer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		path := request.URL.Path
-		if path != "/api/ui/following" && !strings.HasPrefix(path, "/api/ui/playback/") && !strings.HasPrefix(path, "/api/ui/account/") && path != "/api/ui/viewer/legacy" && !accountAdminPath(path) {
+		if path != "/api/ui/following" && path != "/api/ui/preferences" && !strings.HasPrefix(path, "/api/ui/sync/") && !strings.HasPrefix(path, "/api/ui/playback/") && !strings.HasPrefix(path, "/api/ui/account/") && path != "/api/ui/viewer/legacy" && !accountAdminPath(path) {
 			next.ServeHTTP(writer, request)
 			return
 		}

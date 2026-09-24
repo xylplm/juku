@@ -49,11 +49,12 @@ func selectHongguoAppMedia(model map[string]any) (providerMedia, error) {
 		}
 	}
 	duration, _ := strconv.ParseFloat(mapString(model, "video_duration", "duration"), 64)
-	var selected providerMedia
-	bestQuality := -1
 	var keyErr error
-	choices := make(map[int]providerMedia)
-	scores := make(map[int]int)
+	type scoredMedia struct {
+		media providerMedia
+		score int
+	}
+	var choices []scoredMedia
 	for _, row := range variants {
 		variant, _ := row.(map[string]any)
 		meta := nestedMap(variant, "video_meta")
@@ -61,11 +62,11 @@ func selectHongguoAppMedia(model map[string]any) (providerMedia, error) {
 		if codec == "bytevc2" || strings.Contains(strings.ToLower(mapString(variant, "gear_des_key")), "bytevc2") {
 			continue
 		}
-		address := mapString(variant, "main_url")
-		if len(address) > 8192 || !isProviderHTTPMediaURL(address) {
+		addresses := hongguoMediaAddresses(variant)
+		if len(addresses) == 0 {
 			continue
 		}
-		media := providerMedia{URL: address, Referer: "https://novel.snssdk.com/", Duration: time.Duration(duration * float64(time.Second))}
+		media := providerMedia{Referer: "https://novel.snssdk.com/", Duration: time.Duration(duration * float64(time.Second))}
 		encryption := nestedMap(variant, "encrypt_info")
 		spade := mapString(encryption, "spade_a")
 		if spade != "" || encryption["encrypt"] == true || mapString(encryption, "encryption_method") == "cenc-aes-ctr" {
@@ -87,22 +88,55 @@ func selectHongguoAppMedia(model map[string]any) (providerMedia, error) {
 		if codec == "h264" || codec == "avc1" {
 			quality++
 		}
-		if previous, exists := scores[height]; !exists || quality > previous {
-			choices[height], scores[height] = media, quality
-		}
-		if selected.URL == "" || quality > bestQuality {
-			selected, bestQuality = media, quality
+		for _, address := range addresses {
+			media.URL = address
+			choices = append(choices, scoredMedia{media: media, score: quality})
 		}
 	}
-	if selected.URL != "" {
-		for _, media := range choices {
-			selected.Variants = append(selected.Variants, media)
+	if len(choices) > 0 {
+		sort.SliceStable(choices, func(i, j int) bool { return choices[i].score > choices[j].score })
+		selected := choices[0].media
+		for _, choice := range choices {
+			selected.Variants = append(selected.Variants, choice.media)
 		}
-		sort.Slice(selected.Variants, func(i, j int) bool { return selected.Variants[i].Quality > selected.Variants[j].Quality })
 		return selected, nil
 	}
 	if keyErr != nil {
 		return providerMedia{}, fmt.Errorf("红果 App 媒体密钥不可用: %w", keyErr)
 	}
 	return providerMedia{}, errors.New("红果 App 未返回兼容的媒体，已跳过不支持的编码")
+}
+
+func hongguoMediaAddresses(info map[string]any) []string {
+	var addresses []string
+	seen := map[string]bool{}
+	var add func(any)
+	add = func(value any) {
+		switch value := value.(type) {
+		case string:
+			address := strings.TrimSpace(value)
+			if len(address) > 8192 {
+				return
+			}
+			if !isProviderHTTPMediaURL(address) {
+				decoded, err := decodeHongguoBase64(address)
+				if err != nil {
+					return
+				}
+				address = strings.TrimSpace(string(decoded))
+			}
+			if isProviderHTTPMediaURL(address) && !seen[address] {
+				seen[address] = true
+				addresses = append(addresses, address)
+			}
+		case []any:
+			for _, item := range value {
+				add(item)
+			}
+		}
+	}
+	for _, key := range []string{"main_url", "backup_url", "backup_url_1", "backup_url_2", "backup_urls", "url_list"} {
+		add(info[key])
+	}
+	return addresses
 }

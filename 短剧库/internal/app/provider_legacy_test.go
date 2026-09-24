@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -111,6 +112,83 @@ func TestLegacyAnonymousCatalogAndSessionReuse(t *testing.T) {
 	}
 	if loginCalls.Load() != 1 || scriptCalls.Load() != 1 {
 		t.Fatal("restart did not reuse the anonymous session and public protocol")
+	}
+}
+
+func TestLegacyCatalogContinuesAfterShortAndSeenPages(t *testing.T) {
+	d := legacyFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/app/playlet-tab/all" {
+			return legacyFixtureResponse(request, []Tab{{ID: "fixture-tab", Name: "测试分类"}}), nil
+		}
+		if request.URL.Path != "/api/app/playlet/home/tab/fixture-tab" {
+			t.Fatalf("unexpected catalog request: %s", request.URL.Path)
+		}
+		raw := request.URL.Query().Get("data")
+		encrypted, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := aes.NewCipher([]byte(fixtureLegacyProtocol.ParamKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cipher.NewCBCDecrypter(block, []byte(fixtureLegacyProtocol.ParamIV)).CryptBlocks(encrypted, encrypted)
+		plain, err := pkcs7Unpad(encrypted, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var params struct {
+			PageNumber  string `json:"pageNumber"`
+			TabSortType string `json:"tabSortType"`
+		}
+		if err := json.Unmarshal(plain, &params); err != nil {
+			t.Fatal(err)
+		}
+		page, err := strconv.Atoi(params.PageNumber)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch params.TabSortType {
+		case "0":
+			switch page {
+			case 1:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{{ID: "legacy-1", Title: "短页第一页"}, {ID: "legacy-2", Title: "短页第二部"}}}), nil
+			case 2:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{{ID: "legacy-3", Title: "短页后续剧"}}}), nil
+			default:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{}}), nil
+			}
+		case "1":
+			switch page {
+			case 1:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{{ID: "legacy-1", Title: "已见剧"}}}), nil
+			case 2:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{{ID: "legacy-4", Title: "已见页后的新剧"}}}), nil
+			default:
+				return legacyFixtureResponse(request, map[string]any{"list": []Drama{}}), nil
+			}
+		default:
+			return legacyFixtureResponse(request, map[string]any{"list": []Drama{}}), nil
+		}
+	})
+	d.cfg.Token = "fixture-token"
+	d.cfg.InterfaceKey, d.cfg.ParamKey, d.cfg.ParamIV = fixtureLegacyProtocol.InterfaceKey, fixtureLegacyProtocol.ParamKey, fixtureLegacyProtocol.ParamIV
+	d.cfg.MaxPagesPerSort, d.cfg.PageSize = 5, 3
+	items, err := d.fetchCloudFrontDramas(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, item := range items {
+		ids[item.ID] = true
+	}
+	for _, id := range []string{"legacy-1", "legacy-2", "legacy-3", "legacy-4"} {
+		if !ids[id] {
+			t.Fatalf("catalog stopped before loading %s: %+v", id, items)
+		}
+	}
+	if len(items) != 4 {
+		t.Fatalf("catalog returned duplicate or missing items: %d %+v", len(items), items)
 	}
 }
 

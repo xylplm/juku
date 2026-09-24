@@ -23,12 +23,26 @@ type requestBackoff struct {
 	reason string
 }
 
+type httpStatusError struct {
+	host   string
+	status int
+	reason string
+}
+
 func (backoff *requestBackoff) Error() string {
 	reason := ""
 	if backoff.reason != "" {
 		reason = "：" + backoff.reason
 	}
 	return fmt.Sprintf("%s HTTP %d%s，已暂停该域名请求，%s 后可重试", backoff.host, backoff.status, reason, backoff.until.Format("15:04:05"))
+}
+
+func (failure *httpStatusError) Error() string {
+	reason := ""
+	if failure.reason != "" {
+		reason = "：" + failure.reason
+	}
+	return fmt.Sprintf("%s HTTP %d%s", failure.host, failure.status, reason)
 }
 
 func catalogResponseBlockReason(response *http.Response, body []byte) string {
@@ -70,9 +84,9 @@ func (d *Downloader) catalogResponseError(request *http.Request, response *http.
 		d.limiter.mu.Unlock()
 	}
 	if reason != "" {
-		return fmt.Errorf("%s HTTP %d：%s", host, response.StatusCode, reason)
+		return &httpStatusError{host: host, status: response.StatusCode, reason: reason}
 	}
-	return fmt.Errorf("%s HTTP %d", host, response.StatusCode)
+	return &httpStatusError{host: host, status: response.StatusCode}
 }
 
 type requestLimiter struct {

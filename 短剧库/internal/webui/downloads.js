@@ -7,8 +7,7 @@ export function createDownloads(app) {
   let pollTimer, pollPromise, batch = false, taskSignature = '', ffmpegSignature = '';
   let hasActiveTasks = false, polling = false, scheduledDelay = 0;
   const qualityOptions = [0, 2160, 1440, 1080, 720, 540, 480, 360];
-  const storedQuality = number(readPreference('downloadQuality', 0));
-  let downloadQuality = qualityOptions.includes(storedQuality) ? storedQuality : 0;
+  let downloadQuality = 0;
   const qualityLabel = value => value ? value + 'p 优先' : '最高可用';
 
   function setupQualitySelect(select) {
@@ -275,6 +274,8 @@ function schedule(restart = true) {
 
 function init() {
   if (app.viewer?.onlineOnly) return;
+  const storedQuality = number(readPreference('downloadQuality', 0));
+  downloadQuality = qualityOptions.includes(storedQuality) ? storedQuality : 0;
   document.querySelectorAll('[data-download-quality]').forEach(setupQualitySelect);
   const stored = readPreference('downloadFilters', {}), saved = stored && typeof stored === 'object' ? stored : {};
   $('taskSearch').value = typeof saved.search === 'string' ? saved.search.slice(0, 80) : '';

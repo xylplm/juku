@@ -21,7 +21,7 @@ func (a *UIApp) handleRankings(writer http.ResponseWriter, request *http.Request
 	board, found := findRankingBoard(id)
 	pageText := firstNonEmpty(request.URL.Query().Get("page"), "1")
 	page, err := strconv.Atoi(pageText)
-	if !found || err != nil || page < 1 || page > 500 || board.Source == "huangguo" && page != 1 {
+	if !found || err != nil || page < 1 || page > 500 || singlePageRankingBoard(board) && page != 1 {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "榜单或页码无效"})
 		return
 	}

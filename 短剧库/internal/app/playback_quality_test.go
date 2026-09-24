@@ -17,7 +17,7 @@ func TestPlaybackQualityUsesActualCompatibleSourceVariants(t *testing.T) {
 		map[string]any{"main_url": "https://media.example.test/low-h264.mp4", "video_meta": map[string]any{"codec_type": "h264", "definition": "720p"}},
 	}}
 	media, err := selectHongguoAppMedia(model)
-	if err != nil || media.Quality != 1080 || len(media.Variants) != 2 {
+	if err != nil || media.Quality != 1080 || len(playbackQualityOptions(media)) != 2 {
 		t.Fatalf("compatible quality discovery: %+v %v", playbackQualityOptions(media), err)
 	}
 	d := rankingTestDownloader(t, func(*http.Request) (*http.Response, error) {

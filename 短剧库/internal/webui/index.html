@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f7f7f2">
 <title>短剧库</title>
+<script src="/assets/preferences.js"></script>
 <script src="/assets/theme.js"></script>
 <link rel="stylesheet" href="/assets/app.css">
 <link rel="stylesheet" href="/assets/library.css">
@@ -40,6 +41,7 @@
       <div class="catalog-controls" id="libraryFilters" role="group" aria-label="筛选与排序">
         <label class="catalog-select"><select id="sourceSelect" aria-label="站源筛选"><option value="">全部站源</option></select><span data-icon="chevron"></span></label>
         <label class="catalog-select"><select id="channelSelect" aria-label="分类筛选"><option value="">全部分类</option></select><span data-icon="chevron"></span></label>
+        <label class="catalog-select"><select id="releaseFilter" aria-label="状态筛选"><option value="">全部状态</option><option value="finished">完结</option><option value="ongoing">连载</option><option value="unknown">状态未知</option></select><span data-icon="chevron"></span></label>
         <label class="catalog-select"><select id="sortSelect" aria-label="剧库排序"><option value="default">默认排序</option><option value="newest">最新上线</option><option value="oldest">最早上线</option><option value="heat">热度最高</option><option value="views">播放最多</option><option value="title">名称排序</option></select><span data-icon="chevron"></span></label>
         <button id="vipFilterBtn" class="quiet catalog-action vip-filter" data-vip-filter aria-pressed="false" hidden>隐藏 VIP</button>
         <button id="openRankingsBtn" class="quiet catalog-action" aria-label="站点榜单" title="站点榜单" aria-haspopup="dialog" aria-controls="rankingPanel"><span class="button-content"><span data-icon="chart"></span><span class="control-label">榜单</span></span></button><button id="batchSelectBtn" data-download-only class="quiet catalog-action" aria-label="批量选择" title="批量选择" aria-pressed="false"><span class="button-content"><span data-icon="select"></span><span id="batchSelectLabel" class="control-label">批量选择</span></span></button>
@@ -176,6 +178,11 @@
         <div class="viewer-import-row"><label class="small">旧版记录恢复码<input id="legacyImportCode" type="password" maxlength="64" autocomplete="off" placeholder="粘贴一次性恢复码"></label><button id="legacyImportBtn" class="secondary">接回旧记录</button></div>
         <p class="small">恢复码在服务所在电脑的 data/viewer-legacy-code 文件中。旧版记录接入当前登录账号；未登录时接回当前浏览器。</p>
       </div>
+      <div class="viewer-sync-section">
+        <div class="viewer-import-row"><button id="viewerSyncExportBtn" class="secondary">导出同步包</button><button id="viewerSyncImportBtn" class="secondary">导入同步包</button></div>
+        <label class="small viewer-sync-field">同步包 JSON<textarea id="viewerSyncPackage" rows="4" spellcheck="false" placeholder="导出后复制到另一台设备，或粘贴另一台设备生成的同步包"></textarea></label>
+        <p class="small">同步包只包含观看记录和追剧清单；导入时会按较新的观看或更新时间合并。</p>
+      </div>
       <p id="viewerImportStatus" class="small" role="status" aria-live="polite"></p>
     </section>
     <div class="statusbar" id="configText"></div>
@@ -238,60 +245,65 @@
   </div>
 </dialog>
 <dialog id="playerPanel" class="player-dialog" aria-labelledby="playerTitle">
-  <div id="playerViewport" class="player-viewport">
-    <div class="player-heading"><div><span class="small">正在观看</span><h2 id="playerTitle">在线观看</h2></div><button id="closePlayerBtn" class="quiet icon-button" aria-label="关闭播放器"><span data-icon="close"></span></button></div>
-    <div class="player-layout">
-      <section class="player-screen" aria-label="视频播放">
-        <div id="playbackStage" class="playback-stage">
-          <video id="onlineVideo" controls playsinline preload="auto" tabindex="0" aria-label="在线播放器" aria-keyshortcuts="Space ArrowUp ArrowDown ArrowLeft ArrowRight F"></video>
-          <div class="mobile-player-heading mobile-only">
-            <button id="mobileBackBtn" class="quiet icon-button" aria-label="返回剧库"><span data-icon="chevron"></span></button>
-            <span id="mobileHeadingTitle" class="landscape-only"></span><span id="mobileEpisodeLabel">正在加载</span>
-            <button id="mobileRateBtn" class="quiet" aria-label="调整播放倍速">倍速</button>
-            <button id="mobileRotateBtn" class="quiet icon-button" aria-label="横屏播放" aria-pressed="false" disabled><span data-icon="rotate"></span></button>
-            <button id="mobilePlayerSettingsBtn" class="quiet icon-button" aria-label="打开播放设置"><span data-icon="more"></span></button>
-          </div>
-          <button id="mobileLandscapeBtn" class="mobile-landscape-watch mobile-only button-content" hidden><span data-icon="rotate"></span>全屏观看</button>
-          <button id="mobilePlayPauseBtn" class="mobile-play-toggle mobile-only" aria-label="播放"><span data-icon="play"></span></button>
-          <div class="mobile-player-caption mobile-only">
-            <span id="mobileEpisodeVIP" class="mobile-vip-label" hidden>VIP · 仅试看</span><h2 id="mobilePlayerTitle">正在加载</h2>
-            <div class="mobile-progress-heading"><span class="mobile-swipe-hint">上下滑动切换分集</span><span id="mobileBufferStatus"></span><span id="mobilePlaybackTime">0:00 / 0:00</span></div>
-            <div class="mobile-progress-row">
-              <button id="mobileTransportBtn" class="quiet icon-button landscape-only" aria-label="暂停"><span class="control-play"><span data-icon="play"></span></span><span class="control-pause"><span data-icon="pause"></span></span></button>
-              <button id="mobileNextEpisodeBtn" class="quiet icon-button landscape-only" aria-label="下一集" disabled><span data-icon="next"></span></button>
-              <span id="mobileCurrentTime" class="landscape-only mobile-time">0:00</span>
-              <input id="mobilePlaybackProgress" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放进度" disabled>
-              <span id="mobileDuration" class="landscape-only mobile-time">0:00</span>
+  <div id="playerFullscreenRoot" class="player-fullscreen-root">
+    <div id="playerViewport" class="player-viewport">
+      <div class="player-heading"><div><span class="small">正在观看</span><h2 id="playerTitle">在线观看</h2></div><button id="closePlayerBtn" class="quiet icon-button" aria-label="关闭播放器"><span data-icon="close"></span></button></div>
+      <div class="player-layout">
+        <section class="player-screen" aria-label="视频播放">
+          <div id="playbackStage" class="playback-stage">
+            <video id="onlineVideo" controls playsinline preload="auto" tabindex="0" aria-label="在线播放器" aria-keyshortcuts="Space ArrowUp ArrowDown ArrowLeft ArrowRight F"></video>
+            <div class="mobile-player-heading mobile-only">
+              <button id="mobileBackBtn" class="quiet icon-button" aria-label="返回剧库"><span data-icon="chevron"></span></button>
+              <span id="mobileHeadingTitle" class="landscape-only"></span><span id="mobileEpisodeLabel">正在加载</span>
+              <button id="mobileRateBtn" class="quiet" aria-label="调整播放倍速">倍速</button>
+              <button id="mobileRotateBtn" class="quiet icon-button" aria-label="横屏播放" aria-pressed="false" disabled><span data-icon="rotate"></span></button>
+              <button id="mobilePlayerSettingsBtn" class="quiet icon-button" aria-label="打开播放设置"><span data-icon="more"></span></button>
             </div>
-            <div class="mobile-bottom-actions">
-              <button id="mobileLandscapeRateBtn" class="quiet landscape-only" aria-label="调整播放倍速">倍速</button>
-              <button id="mobileLandscapeQualityBtn" class="quiet landscape-only" aria-label="调整清晰度">自动</button>
-              <button id="mobileEpisodesBtn" class="mobile-episode-rail" aria-label="打开选集"><span>选集 <small id="mobileEpisodeSummary">获取分集中</small></span><span class="mobile-episode-chevron"><span data-icon="chevron"></span></span></button>
+            <button id="mobileLandscapeBtn" class="mobile-landscape-watch mobile-only button-content" hidden><span data-icon="rotate"></span>全屏观看</button>
+            <button id="mobilePlayPauseBtn" class="mobile-play-toggle mobile-only" aria-label="播放"><span data-icon="play"></span></button>
+            <div class="mobile-player-caption mobile-only">
+              <span id="mobileEpisodeVIP" class="mobile-vip-label" hidden>VIP · 仅试看</span><h2 id="mobilePlayerTitle">正在加载</h2>
+              <div class="mobile-progress-heading"><span class="mobile-swipe-hint">上下滑动切换分集</span><span id="mobileBufferStatus"></span><span id="mobilePlaybackTime">0:00 / 0:00</span></div>
+              <div class="mobile-progress-row">
+                <button id="mobileTransportBtn" class="quiet icon-button landscape-only" aria-label="暂停"><span class="control-play"><span data-icon="play"></span></span><span class="control-pause"><span data-icon="pause"></span></span></button>
+                <button id="mobileNextEpisodeBtn" class="quiet icon-button landscape-only" aria-label="下一集" disabled><span data-icon="next"></span></button>
+                <span id="mobileCurrentTime" class="landscape-only mobile-time">0:00</span>
+                <input id="mobilePlaybackProgress" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放进度" disabled>
+                <span id="mobileDuration" class="landscape-only mobile-time">0:00</span>
+              </div>
+              <div class="mobile-bottom-actions">
+                <button id="mobileLandscapeRateBtn" class="quiet landscape-only" aria-label="调整播放倍速">倍速</button>
+                <button id="mobileLandscapeQualityBtn" class="quiet landscape-only" aria-label="调整清晰度">自动</button>
+                <button id="mobileEpisodesBtn" class="mobile-episode-rail" aria-label="打开选集"><span>选集 <small id="mobileEpisodeSummary">获取分集中</small></span><span class="mobile-episode-chevron"><span data-icon="chevron"></span></span></button>
+                <button id="mobileVideoFullscreenBtn" class="quiet icon-button" aria-label="全屏播放" title="全屏播放" hidden><span data-icon="fullscreen"></span></button>
+              </div>
             </div>
+            <div id="playbackFullscreenStatus" class="playback-gesture-status" role="status" aria-live="polite" hidden></div>
+            <div id="playbackGestureStatus" class="playback-gesture-status" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+            <div id="playbackDanmaku" class="playback-danmaku" aria-hidden="true"></div>
+            <button id="exitPlayerFullscreenBtn" class="secondary stage-fullscreen-exit" aria-label="退出播放器全屏">退出全屏</button>
           </div>
-          <div id="playbackGestureStatus" class="playback-gesture-status" role="status" aria-live="polite" aria-atomic="true" hidden></div>
-          <div id="playbackDanmaku" class="playback-danmaku" aria-hidden="true"></div>
-          <button id="exitPlayerFullscreenBtn" class="secondary stage-fullscreen-exit" aria-label="退出播放器全屏">退出全屏</button>
-        </div>
-        <div class="player-toolbar"><button id="toggleEpisodesBtn" class="secondary" aria-expanded="false" aria-controls="playerEpisodesPanel">选集</button><button id="previousEpisodeBtn" class="secondary icon-button" aria-label="上一集" title="上一集" disabled><span data-icon="previous"></span></button><button id="nextEpisodeBtn" class="button-content" disabled>下一集<span data-icon="next"></span></button><label id="playbackQualityControl" hidden>画质<select id="playbackQuality" aria-label="播放清晰度"><option value="0">自动</option></select></label><label>倍速<select id="playbackRate" aria-label="播放倍速"><option value="0.75">0.75 倍</option><option value="1" selected>1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option><option value="3">3 倍</option></select></label><button id="playerFullscreenBtn" class="secondary icon-button" aria-label="全屏" title="全屏" hidden><span data-icon="fullscreen"></span></button><button id="playerPreferencesBtn" class="secondary icon-button" aria-label="播放设置" aria-expanded="false" aria-controls="playerPreferences"><span data-icon="settings"></span></button></div>
-        <div class="playback-feedback"><span id="playbackStatus" class="small" role="status" aria-live="polite"></span><span id="playbackBufferStatus" class="small" hidden></span><span id="prefetchStatus" class="small" role="status" aria-live="polite" hidden></span></div>
-        <div id="playbackHistoryStatus" class="small" role="status" aria-live="polite"></div><div class="playback-error-row"><div id="playbackError" class="error" role="alert"></div><button id="retryPlaybackBtn" class="secondary" disabled hidden>重试播放</button></div>
-        <div id="playerPreferences" class="player-preferences" hidden>
-          <div class="mobile-settings-heading mobile-only"><h3 id="mobilePreferencesTitle">更多</h3><button id="closePlayerPreferencesBtn" class="quiet icon-button" aria-label="关闭播放设置"><span data-icon="close"></span></button></div>
-          <div id="mobileRateGroup" class="mobile-setting-group mobile-only"><span>倍速</span><div id="mobileRateChoices" class="mobile-setting-choices" role="group" aria-label="播放倍速"></div></div>
-          <div id="mobileQualityGroup" class="mobile-setting-group mobile-only"><span>清晰度</span><div id="mobileQualityChoices" class="mobile-setting-choices" role="group" aria-label="播放画质"></div></div>
-          <div class="mobile-setting-group mobile-only"><span id="mobileVideoSize">读取视频尺寸…</span><label class="preference-toggle"><span>自动旋转</span><input id="mobileAutoRotate" type="checkbox" checked></label><p id="mobileOrientationHint" class="small">跟随手机方向，也可随时手动旋转。</p><button id="mobileOrientationPermissionBtn" class="secondary" hidden>启用方向感应</button></div>
-          <label class="preference-toggle"><span>自动下一集</span><input id="autoNextEpisode" type="checkbox" checked></label><label class="preference-toggle"><span>预缓存下一集<small>临近结束时提前准备</small></span><input id="prefetchNextEpisode" type="checkbox" checked></label><label class="preference-toggle" id="danmakuControl" hidden><span>弹幕</span><input id="danmakuEnabled" type="checkbox" checked></label><span id="danmakuStatus" class="small" role="status" aria-live="polite" hidden></span>
-          <div class="toolbar"><button id="pictureInPictureBtn" class="secondary" hidden>画中画</button><button id="mobileFullscreenBtn" class="secondary mobile-only" hidden>全屏播放</button></div><p id="playbackHint" class="small player-hint">观看进度自动保存。</p><p class="small player-shortcuts"><span class="player-keyboard-hint">空格播放/暂停，← → 跳转 5 秒，↑ ↓ 调节音量，长按 → 临时 3 倍速，F 全屏。<br></span>上滑下一集、下滑上一集；播放时长按画面临时 3 倍速，松开恢复。横屏时点画面显示或隐藏操作栏。</p>
-        </div>
-      </section>
-      <nav id="playerEpisodesPanel" class="player-episodes" aria-label="选择播放分集"><div class="episode-panel-heading"><div><h3>选集</h3><p id="playbackEpisodeCount" class="small"></p></div><button id="closeEpisodesBtn" class="quiet icon-button" aria-label="关闭选集"><span data-icon="close"></span></button></div><div class="episode-navigation"><select id="episodeRange" aria-label="分集范围"></select><button id="currentEpisodeBtn" class="quiet">当前集</button></div><div id="playbackEpisodes" class="player-episode-list"></div><form id="episodeJumpForm" class="episode-jump"><label for="jumpEpisode">跳到</label><input id="jumpEpisode" type="number" min="1" inputmode="numeric" aria-label="分集序号"><span>集</span><button id="jumpEpisodeBtn" class="secondary" type="submit">前往</button></form></nav>
+          <div class="player-toolbar"><button id="toggleEpisodesBtn" class="secondary" aria-expanded="false" aria-controls="playerEpisodesPanel">选集</button><button id="previousEpisodeBtn" class="secondary icon-button" aria-label="上一集" title="上一集" disabled><span data-icon="previous"></span></button><button id="nextEpisodeBtn" class="button-content" disabled>下一集<span data-icon="next"></span></button><label id="playbackQualityControl" hidden>画质<select id="playbackQuality" aria-label="播放清晰度"><option value="0">自动</option></select></label><label>倍速<select id="playbackRate" aria-label="播放倍速"><option value="0.75">0.75 倍</option><option value="1" selected>1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option><option value="3">3 倍</option></select></label><button id="playerFullscreenBtn" class="secondary icon-button" aria-label="全屏" title="全屏" hidden><span data-icon="fullscreen"></span></button><button id="playerPreferencesBtn" class="secondary icon-button" aria-label="播放设置" aria-expanded="false" aria-controls="playerPreferences"><span data-icon="settings"></span></button></div>
+          <div class="playback-feedback"><span id="playbackStatus" class="small" role="status" aria-live="polite"></span><span id="playbackBufferStatus" class="small" hidden></span><span id="prefetchStatus" class="small" role="status" aria-live="polite" hidden></span></div>
+          <div id="playbackHistoryStatus" class="small" role="status" aria-live="polite"></div><div class="playback-error-row"><div id="playbackError" class="error" role="alert"></div><button id="retryPlaybackBtn" class="secondary" disabled hidden>重试播放</button></div>
+          <div id="playerPreferences" class="player-preferences" hidden>
+            <div class="mobile-settings-heading mobile-only"><h3 id="mobilePreferencesTitle">更多</h3><button id="closePlayerPreferencesBtn" class="quiet icon-button" aria-label="关闭播放设置"><span data-icon="close"></span></button></div>
+            <div id="mobileRateGroup" class="mobile-setting-group mobile-only"><span>倍速</span><div id="mobileRateChoices" class="mobile-setting-choices" role="group" aria-label="播放倍速"></div></div>
+            <div id="mobileQualityGroup" class="mobile-setting-group mobile-only"><span>清晰度</span><div id="mobileQualityChoices" class="mobile-setting-choices" role="group" aria-label="播放画质"></div></div>
+            <div class="mobile-setting-group mobile-only"><span id="mobileVideoSize">读取视频尺寸…</span><label class="preference-toggle"><span>自动旋转</span><input id="mobileAutoRotate" type="checkbox" checked></label><p id="mobileOrientationHint" class="small">跟随手机方向，也可随时手动旋转。</p><button id="mobileOrientationPermissionBtn" class="secondary" hidden>启用方向感应</button></div>
+            <label class="preference-toggle"><span>自动下一集</span><input id="autoNextEpisode" type="checkbox" checked></label><label class="preference-toggle"><span>预缓存下一集<small>临近结束时提前准备</small></span><input id="prefetchNextEpisode" type="checkbox" checked></label><label class="preference-toggle" id="danmakuControl" hidden><span>弹幕</span><input id="danmakuEnabled" type="checkbox" checked></label><span id="danmakuStatus" class="small" role="status" aria-live="polite" hidden></span>
+            <div class="toolbar"><button id="pictureInPictureBtn" class="secondary" hidden>画中画</button><button id="mobileFullscreenBtn" class="secondary mobile-only" hidden>全屏播放</button></div><p id="playbackHint" class="small player-hint">观看进度自动保存。</p><p class="small player-shortcuts"><span class="player-keyboard-hint">空格播放/暂停，← → 跳转 5 秒，↑ ↓ 调节音量，长按 → 临时 3 倍速，F 全屏。<br></span>上滑下一集、下滑上一集；播放时长按画面临时 3 倍速，松开恢复。横屏时点画面显示或隐藏操作栏。</p>
+          </div>
+        </section>
+        <nav id="playerEpisodesPanel" class="player-episodes" aria-label="选择播放分集"><div class="episode-panel-heading"><div><h3>选集</h3><p id="playbackEpisodeCount" class="small"></p></div><button id="closeEpisodesBtn" class="quiet icon-button" aria-label="关闭选集"><span data-icon="close"></span></button></div><div class="episode-navigation"><select id="episodeRange" aria-label="分集范围"></select><button id="currentEpisodeBtn" class="quiet">当前集</button></div><div id="playbackEpisodes" class="player-episode-list"></div><form id="episodeJumpForm" class="episode-jump"><label for="jumpEpisode">跳到</label><input id="jumpEpisode" type="number" min="1" inputmode="numeric" aria-label="分集序号"><span>集</span><button id="jumpEpisodeBtn" class="secondary" type="submit">前往</button></form></nav>
+      </div>
+      <button id="playerSheetBackdrop" class="player-sheet-backdrop" aria-label="关闭播放面板" tabindex="-1"></button>
     </div>
-    <button id="playerSheetBackdrop" class="player-sheet-backdrop" aria-label="关闭播放面板" tabindex="-1"></button>
   </div>
 </dialog>
 <div class="toast" id="messageText" role="status" aria-live="polite"></div>
 <script src="/assets/navigation.js"></script>
+<script src="/assets/player-fullscreen.js"></script>
 <script src="/assets/player-danmaku.js"></script>
 <script src="/assets/history.js"></script>
 <script src="/assets/player-buffer.js"></script>

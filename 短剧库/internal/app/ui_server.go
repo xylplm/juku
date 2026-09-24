@@ -32,37 +32,40 @@ const (
 )
 
 type UIApp struct {
-	downloader           *Downloader
-	cfg                  Config
-	mu                   sync.Mutex
-	dramas               []Drama
-	selected             map[string]bool
-	tasks                map[string]*UITask
-	taskOrder            []string
-	dramaDirectories     map[string]string
-	merges               map[string]*UIMergeState
-	lastError            string
-	loadedAt             time.Time
-	libraryLoading       chan struct{}
-	librarySaved         bool
-	libraryDirty         bool
-	libraryAttempted     bool
-	libraryRevision      uint64
-	librarySources       map[string]librarySourceState
-	libraryError         string
-	libraryCancel        context.CancelFunc
-	libraryWriteMu       sync.Mutex
-	libraryLastSave      time.Time
-	libraryApp           *hongguoCatalogState
-	libraryMore          bool
-	libraryLoadingSource string
-	libraryMetadata      libraryMetadataProgress
-	metadataQueue        []string
-	metadataPending      map[string]bool
-	metadataCancel       context.CancelFunc
-	metadataDone         chan struct{}
-	metadataClosed       bool
-	rankingApplied       map[string]time.Time
+	downloader             *Downloader
+	cfg                    Config
+	mu                     sync.Mutex
+	dramas                 []Drama
+	selected               map[string]bool
+	tasks                  map[string]*UITask
+	taskOrder              []string
+	dramaDirectories       map[string]string
+	merges                 map[string]*UIMergeState
+	lastError              string
+	loadedAt               time.Time
+	libraryLoading         chan struct{}
+	librarySaved           bool
+	libraryDirty           bool
+	libraryAttempted       bool
+	libraryRevision        uint64
+	librarySources         map[string]librarySourceState
+	libraryError           string
+	libraryCancel          context.CancelFunc
+	libraryWriteMu         sync.Mutex
+	libraryLastSave        time.Time
+	libraryApp             *hongguoCatalogState
+	libraryProviders       map[string]providerCatalogCursor
+	libraryMore            bool
+	libraryLoadingSource   string
+	libraryLoadingPhase    string
+	libraryLoadingCategory string
+	libraryMetadata        libraryMetadataProgress
+	metadataQueue          []string
+	metadataPending        map[string]bool
+	metadataCancel         context.CancelFunc
+	metadataDone           chan struct{}
+	metadataClosed         bool
+	rankingApplied         map[string]time.Time
 
 	cond                  *sync.Cond
 	statePath             string
@@ -258,6 +261,8 @@ func (a *UIApp) routes() http.Handler {
 	mux.Handle("/assets/", webAssets())
 	mux.HandleFunc("/api/ui/viewer", a.handleViewer)
 	mux.HandleFunc("/api/ui/viewer/legacy", a.handleViewerLegacy)
+	mux.HandleFunc("/api/ui/sync/package", a.handleViewerSyncPackage)
+	mux.HandleFunc("/api/ui/preferences", a.handlePreferences)
 	mux.HandleFunc("/api/ui/account/register", a.handleAccountRegister)
 	mux.HandleFunc("/api/ui/account/login", a.handleAccountLogin)
 	mux.HandleFunc("/api/ui/account/logout", a.handleAccountLogout)
@@ -268,6 +273,8 @@ func (a *UIApp) routes() http.Handler {
 	mux.HandleFunc("/api/ui/admin/accounts/sources", a.handleAdminAccountPermissions)
 	mux.HandleFunc("/api/ui/admin/accounts/permissions", a.handleAdminAccountPermissions)
 	mux.HandleFunc("/api/ui/dramas", a.handleDramas)
+	mux.HandleFunc("/api/ui/dramas/cancel", a.handleLibraryCancel)
+	mux.HandleFunc("/api/ui/categories", a.handleCategories)
 	mux.HandleFunc("/api/ui/cover/repair", a.handleCoverRepair)
 	mux.HandleFunc("/api/ui/dramas/refresh", a.handleDramaRefresh)
 	mux.HandleFunc("/api/ui/vip/metadata", a.handleVIPMetadata)
@@ -733,9 +740,18 @@ func (a *UIApp) handleDramas(w http.ResponseWriter, r *http.Request) {
 	}
 	source := r.URL.Query().Get("source")
 	switch source {
-	case "", "huangguo", "cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo:
+	case "", "huangguo", "cloudfront", sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持刷新该站源"})
+		return
+	}
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	if category != "" && source == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "分类更新需要先选择具体站源"})
+		return
+	}
+	if category != "" && !validProviderCategory(canonicalProviderSource(source), category) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "内容分类无效"})
 		return
 	}
 	if source != "" && !requireSource(w, r.Context(), source) {
@@ -744,12 +760,12 @@ func (a *UIApp) handleDramas(w http.ResponseWriter, r *http.Request) {
 	var priority []string
 	if raw := r.URL.Query().Get("priority"); (update || more) && raw != "" {
 		priority = strings.Split(raw, ",")
-		if len(raw) > 6000 || len(priority) > sortMetadataBatchSize {
+		if len(raw) > 24000 || len(priority) > sortMetadataBatchSize {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "优先补齐条目过多"})
 			return
 		}
 		for _, id := range priority {
-			if len(id) > 120 {
+			if len(id) > 512 {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效的剧集 ID"})
 				return
 			}
@@ -767,7 +783,7 @@ func (a *UIApp) handleDramas(w http.ResponseWriter, r *http.Request) {
 		} else if more {
 			mode = libraryLoadMore
 		}
-		a.startLibraryLoadLocked(source, mode, priority, r.Context())
+		a.startLibraryLoadLocked(source, mode, priority, category, r.Context())
 	}
 	revision, _ := strconv.ParseUint(r.URL.Query().Get("revision"), 10, 64)
 	resp := a.librarySnapshotForSourceLocked(r.Context(), revision)
@@ -776,6 +792,27 @@ func (a *UIApp) handleDramas(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *UIApp) handleCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	source := canonicalProviderSource(r.URL.Query().Get("source"))
+	if source == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请选择站源"})
+		return
+	}
+	if !requireSource(w, r.Context(), source) {
+		return
+	}
+	items, err := a.downloader.fetchProviderCategories(r.Context(), source)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": a.redactError(err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"source": source, "items": items})
 }
 
 func (a *UIApp) normalizeDramaCovers(dramas []Drama) {

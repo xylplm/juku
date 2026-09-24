@@ -11,6 +11,13 @@ import (
 
 const dramaRefreshRetryDelay = 5 * time.Minute
 
+func dramaRefreshRetryDuration(err error) time.Duration {
+	if err == nil {
+		return dramaRefreshRetryDelay
+	}
+	return sortMetadataFailureDelay(err)
+}
+
 type dramaRefreshResult struct {
 	DramaID    string `json:"dramaId"`
 	Drama      Drama  `json:"drama"`
@@ -156,7 +163,7 @@ func (a *UIApp) refreshDramaMetadata(ctx context.Context, drama Drama) (dramaRef
 		a.downloader.recordDiagnostic(diagnosticEvent{Event: "drama.metadata_failed", Source: dramaProvider(drama), DramaID: drama.ID, Message: a.redactError(err)})
 	}
 	a.mu.Lock()
-	call.err, call.retryAt = err, time.Now().Add(dramaRefreshRetryDelay)
+	call.err, call.retryAt = err, time.Now().Add(dramaRefreshRetryDuration(err))
 	if ctx.Err() != nil {
 		call.err = ctx.Err()
 		delete(a.dramaRefreshes, drama.ID)

@@ -14,6 +14,7 @@ func (d *Downloader) fetchAllDramas(ctx context.Context, sourceFilter string) ([
 	if more, _ := ctx.Value(libraryMoreKey{}).(bool); more {
 		return d.fetchMoreLibrary(ctx, sourceFilter)
 	}
+	category, _ := ctx.Value(libraryCategoryKey{}).(string)
 	fmt.Println("正在获取剧库列表...")
 	type result struct {
 		name  string
@@ -29,7 +30,16 @@ func (d *Downloader) fetchAllDramas(ctx context.Context, sourceFilter string) ([
 		{name: sourceHuangguoAI, timeout: 10 * time.Minute, fn: d.fetchHuangguoAIDramas},
 		{name: sourceHuangguoVideo, timeout: 10 * time.Minute, fn: d.fetchHuangguoVideoDramas},
 		{name: sourceHuangdou, timeout: 10 * time.Minute, fn: d.fetchHuangdouDramas},
-		{name: sourceHongguo, timeout: 10 * time.Minute, fn: d.fetchHongguoDramas},
+		{name: sourceHongguo, timeout: 10 * time.Minute, fn: func(ctx context.Context) ([]Drama, error) { return d.fetchHongguoCategoryDramas(ctx, category) }},
+		{name: sourceHuangju, timeout: 2 * time.Minute, fn: func(ctx context.Context) ([]Drama, error) {
+			return d.fetchPagedProviderDramas(ctx, sourceHuangju, category)
+		}},
+		{name: sourceYeguo, timeout: 2 * time.Minute, fn: func(ctx context.Context) ([]Drama, error) {
+			return d.fetchPagedProviderDramas(ctx, sourceYeguo, category)
+		}},
+		{name: sourceDSD, timeout: 3 * time.Minute, fn: func(ctx context.Context) ([]Drama, error) {
+			return d.fetchPagedProviderDramas(ctx, sourceDSD, category)
+		}},
 	}
 	selectedJobs := jobs[:0]
 	for _, job := range jobs {
@@ -53,7 +63,7 @@ func (d *Downloader) fetchAllDramas(ctx context.Context, sourceFilter string) ([
 	failures := map[string]error{}
 	for range jobs {
 		res := <-ch
-		if len(res.items) == 0 && res.err == nil && !(res.name == sourceHongguo && hongguoCatalogInitialized(d.hongguoCatalogSnapshot())) {
+		if len(res.items) == 0 && res.err == nil && !(res.name == sourceHongguo && hongguoCatalogInitialized(d.hongguoCatalogSnapshot())) && !d.providerCatalogSnapshot()[res.name].Initialized {
 			res.err = errors.New("未返回可识别的视频数据")
 		}
 		if res.err != nil {

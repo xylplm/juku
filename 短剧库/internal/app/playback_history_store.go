@@ -73,16 +73,12 @@ func newPlaybackHistoryStore(directory string) *playbackHistoryStore {
 		return store
 	}
 	for _, entry := range saved.Entries {
-		id, source, valid := playbackHistoryIdentity(entry.DramaID)
-		if !valid || entry.Source != "" && canonicalProviderSource(entry.Source) != source || entry.Index < 1 || entry.Total < entry.Index || len(entry.Title) > 4096 || len(entry.ChapterID) > 2048 || len(entry.Episode) > 128 || !validPlaybackHistoryTime(entry.Position) || !validPlaybackHistoryTime(entry.Duration) || entry.WatchedAt.IsZero() {
+		entry, valid := normalizePlaybackHistoryEntry(entry)
+		if !valid {
 			continue
 		}
-		entry.DramaID, entry.Source = id, source
-		if entry.Mode != "collection" {
-			entry.Mode, entry.TaskID = "online", ""
-		}
-		if current, exists := store.entries[id]; !exists || entry.WatchedAt.After(current.WatchedAt) {
-			store.entries[id] = entry
+		if current, exists := store.entries[entry.DramaID]; !exists || entry.WatchedAt.After(current.WatchedAt) {
+			store.entries[entry.DramaID] = entry
 		}
 	}
 	store.trimLocked()
@@ -91,6 +87,20 @@ func newPlaybackHistoryStore(directory string) *playbackHistoryStore {
 
 func validPlaybackHistoryTime(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 24*60*60
+}
+
+func normalizePlaybackHistoryEntry(entry playbackHistoryEntry) (playbackHistoryEntry, bool) {
+	id, source, valid := playbackHistoryIdentity(entry.DramaID)
+	if !valid || entry.Source != "" && canonicalProviderSource(entry.Source) != source || entry.Index < 1 || entry.Total < entry.Index || len(entry.Title) > 4096 || len(entry.ChapterID) > 2048 || len(entry.Episode) > 128 || !validPlaybackHistoryTime(entry.Position) || !validPlaybackHistoryTime(entry.Duration) || entry.WatchedAt.IsZero() {
+		return playbackHistoryEntry{}, false
+	}
+	entry.DramaID, entry.Source = id, source
+	if entry.Mode != "collection" {
+		entry.Mode, entry.TaskID = "online", ""
+	} else if len(entry.TaskID) > 512 {
+		return playbackHistoryEntry{}, false
+	}
+	return entry, true
 }
 
 func (store *playbackHistoryStore) list() ([]playbackHistoryEntry, error) {
@@ -152,6 +162,35 @@ func (store *playbackHistoryStore) trimLocked() {
 	for _, entry := range store.listLocked()[playbackHistoryLimit:] {
 		delete(store.entries, entry.DramaID)
 	}
+}
+
+func (store *playbackHistoryStore) merge(entries []playbackHistoryEntry) (int, error) {
+	store.mu.Lock()
+	if store.loadErr != nil {
+		err := store.loadErr
+		store.mu.Unlock()
+		return 0, err
+	}
+	imported := 0
+	for _, entry := range entries {
+		entry, valid := normalizePlaybackHistoryEntry(entry)
+		if !valid || !entry.WatchedAt.After(store.cleared) || !entry.WatchedAt.After(store.deleted[entry.DramaID]) {
+			continue
+		}
+		if current, exists := store.entries[entry.DramaID]; exists && !entry.WatchedAt.After(current.WatchedAt) {
+			continue
+		}
+		store.entries[entry.DramaID] = entry
+		imported++
+	}
+	if imported == 0 {
+		store.mu.Unlock()
+		return 0, nil
+	}
+	store.revision++
+	store.trimLocked()
+	store.mu.Unlock()
+	return imported, store.flush()
 }
 
 func (store *playbackHistoryStore) remove(id string, all bool) error {

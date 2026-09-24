@@ -11,11 +11,12 @@ import (
 )
 
 type libraryCache struct {
-	Dramas     []Drama                       `json:"dramas"`
-	LoadedAt   time.Time                     `json:"loadedAt"`
-	LastError  string                        `json:"lastError,omitempty"`
-	Sources    map[string]librarySourceState `json:"sources,omitempty"`
-	HongguoApp *hongguoCatalogState          `json:"hongguoApp,omitempty"`
+	Dramas          []Drama                          `json:"dramas"`
+	LoadedAt        time.Time                        `json:"loadedAt"`
+	LastError       string                           `json:"lastError,omitempty"`
+	Sources         map[string]librarySourceState    `json:"sources,omitempty"`
+	HongguoApp      *hongguoCatalogState             `json:"hongguoApp,omitempty"`
+	ProviderCatalog map[string]providerCatalogCursor `json:"providerCatalog,omitempty"`
 }
 
 func libraryCachePath(outputDir string) string {
@@ -67,6 +68,7 @@ func (a *UIApp) loadLibrary() {
 	cache, err := readLibraryCache(a.cfg.dataDirectory())
 	if err == nil {
 		a.downloader.restoreHongguoCatalog(cache.HongguoApp)
+		a.downloader.restoreProviderCatalog(cache.ProviderCatalog)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -83,6 +85,7 @@ func (a *UIApp) loadLibrary() {
 		a.libraryError = cache.LastError
 	}
 	a.librarySources = cache.Sources
+	a.libraryProviders = a.downloader.providerCatalogSnapshot()
 	if cache.HongguoApp != nil {
 		a.libraryApp = a.downloader.hongguoCatalogSnapshot()
 	}
@@ -99,7 +102,7 @@ func (a *UIApp) loadLibrary() {
 	a.libraryRevision = 1
 	if len(a.dramas) > 0 {
 		if _, err := os.Stat(libraryCachePath(a.cfg.dataDirectory())); errors.Is(err, os.ErrNotExist) {
-			if err := writeLibraryCache(a.cfg.dataDirectory(), libraryCache{Dramas: a.dramas, LoadedAt: a.loadedAt, LastError: a.libraryError, Sources: a.librarySources, HongguoApp: a.libraryApp}); err != nil {
+			if err := writeLibraryCache(a.cfg.dataDirectory(), libraryCache{Dramas: a.dramas, LoadedAt: a.loadedAt, LastError: a.libraryError, Sources: a.librarySources, HongguoApp: a.libraryApp, ProviderCatalog: a.libraryProviders}); err != nil {
 				a.libraryError = "剧库缓存保存失败: " + a.redactError(err)
 				return
 			}
@@ -120,6 +123,7 @@ func (d *Downloader) GetAllDramas(ctx context.Context) ([]Drama, error) {
 	cache, err := readLibraryCache(d.cfg.dataDirectory())
 	if err == nil {
 		d.restoreHongguoCatalog(cache.HongguoApp)
+		d.restoreProviderCatalog(cache.ProviderCatalog)
 	}
 	if err == nil && len(cache.Dramas) > 0 {
 		fmt.Printf("使用本地剧库缓存：%d 部（%s），更新请使用 -refresh\n", len(cache.Dramas), cache.LoadedAt.Format("2006-01-02 15:04:05"))
@@ -137,13 +141,14 @@ func (d *Downloader) GetAllDramas(ctx context.Context) ([]Drama, error) {
 func (d *Downloader) RefreshDramas(ctx context.Context, source string) ([]Drama, error) {
 	cached, _ := readLibraryCache(d.cfg.dataDirectory())
 	d.restoreHongguoCatalog(cached.HongguoApp)
+	d.restoreProviderCatalog(cached.ProviderCatalog)
 	ctx = withKnownHongguoDramas(ctx, cached.Dramas)
 	fresh, loadErr := d.fetchAllDramas(ctx, source)
 	merged := mergeSourceDramas(cached.Dramas, fresh, loadErr, source)
 	if len(fresh) == 0 && len(merged) == 0 {
 		return nil, loadErr
 	}
-	cache := libraryCache{Dramas: merged, LoadedAt: time.Now(), HongguoApp: d.hongguoCatalogSnapshot()}
+	cache := libraryCache{Dramas: merged, LoadedAt: time.Now(), HongguoApp: d.hongguoCatalogSnapshot(), ProviderCatalog: d.providerCatalogSnapshot(), Sources: cached.Sources}
 	if len(fresh) == 0 {
 		cache.LoadedAt = cached.LoadedAt
 	}

@@ -1,13 +1,13 @@
 (() => {
-  window.JukuPlayerOrientation = ({panel, video, active}) => {
+  window.JukuPlayerOrientation = ({panel, video, fullscreen, active}) => {
     const node = id => document.getElementById(id);
     const rotate = node('mobileRotateBtn'), automatic = node('mobileAutoRotate');
-    const watch = node('mobileLandscapeBtn');
+    const watch = node('mobileLandscapeBtn'), frame = node('playerFullscreenRoot');
     const permission = node('mobileOrientationPermissionBtn'), hint = node('mobileOrientationHint');
     let manual = null, sensed = null, sensedTurn = 90, angle = 0, landscape = false;
     let previousViewport = null, sensorKind = null, candidate = '', timer = null, listening = false, granted = false, signature = '';
     let enabled = true;
-    try {enabled = localStorage.getItem('juku.playback.autoRotate') !== 'false';} catch (_) {}
+    enabled = window.JukuPreferences?.read('playback.autoRotate', true) !== false;
     automatic.checked = enabled;
 
     function sensorAvailable() {return window.isSecureContext && typeof window.DeviceOrientationEvent !== 'undefined';}
@@ -50,7 +50,7 @@
       }, 300);
     }
     function update() {
-      const on = active(), width = panel.clientWidth || window.innerWidth, height = panel.clientHeight || window.innerHeight;
+      const on = active(), width = frame.clientWidth || window.innerWidth, height = frame.clientHeight || window.innerHeight;
       const viewportLandscape = width > height;
       const videoWidth = video.videoWidth, videoHeight = video.videoHeight;
       const known = videoWidth > 0 && videoHeight > 0;
@@ -85,7 +85,7 @@
     }
     function viewportChanged() {
       if (!active()) return;
-      const next = (panel.clientWidth || window.innerWidth) > (panel.clientHeight || window.innerHeight);
+      const next = (frame.clientWidth || window.innerWidth) > (frame.clientHeight || window.innerHeight);
       if (previousViewport !== null && next !== previousViewport) {
         if (enabled) manual = null;
         sensed = null;
@@ -115,17 +115,14 @@
     rotate.addEventListener('click', () => {if (!rotate.disabled) setLandscape(!landscape);});
     watch.addEventListener('click', () => {
       setLandscape(true);
-      try {
-        const request = panel.requestFullscreen?.() || panel.webkitRequestFullscreen?.();
-        request?.catch?.(() => {});
-      } catch (_) {}
+      fullscreen.enter();
     });
     automatic.addEventListener('change', () => {
       enabled = automatic.checked;
       manual = enabled ? null : landscape;
       sensed = null;
       sensorKind = null;
-      try {localStorage.setItem('juku.playback.autoRotate', String(enabled));} catch (_) {}
+      window.JukuPreferences?.save('playback.autoRotate', enabled);
       if (!enabled) stopSensor();
       update();
     });
@@ -134,7 +131,7 @@
     window.screen?.orientation?.addEventListener?.('change', viewportChanged);
     window.visualViewport?.addEventListener('resize', viewportChanged);
     for (const type of ['loadedmetadata', 'resize', 'emptied']) video.addEventListener(type, update);
-    for (const type of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(type, viewportChanged);
+    panel.addEventListener('jukufullscreenchange', viewportChanged);
     panel.addEventListener('close', () => {
       manual = null;
       sensed = null;
@@ -145,6 +142,13 @@
       update();
     });
     if (!sensorAvailable()) hint.textContent = '可跟随屏幕方向旋转，也可手动旋转；方向感应需 HTTPS 和浏览器支持。';
+    window.JukuPreferences?.onChange(event => {
+      if (!event.keys.includes('playback.autoRotate')) return;
+      enabled = event.values['playback.autoRotate'] !== false;
+      automatic.checked = enabled;
+      if (!enabled) stopSensor();
+      update();
+    });
     return {update, rotation: () => angle, landscape: () => landscape, portrait: () => setLandscape(false)};
   };
 })();

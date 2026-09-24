@@ -76,10 +76,12 @@ func cloneHongguoCatalogState(state *hongguoCatalogState) *hongguoCatalogState {
 }
 
 func (downloader *Downloader) restoreHongguoCatalog(state *hongguoCatalogState) {
-	if state == nil || state.Version != 1 {
+	if state == nil || state.Version != 1 || !hongguoNumericID.MatchString(state.DeviceID) || !hongguoNumericID.MatchString(state.InstallID) {
 		return
 	}
 	client := downloader.hongguoClient()
+	client.catalogMu.Lock()
+	defer client.catalogMu.Unlock()
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if len(client.state.Feeds) != 0 {
@@ -92,9 +94,9 @@ func (downloader *Downloader) restoreHongguoCatalog(state *hongguoCatalogState) 
 	for name, cursor := range cloned.Feeds {
 		known := false
 		for _, genre := range hongguoAppGenres {
-			known = known || name == genre.key
+			known = known || name == genre.key || name == "category:"+genre.key
 		}
-		if !known || cursor.Offset < 0 || cursor.Offset > 1_000_000 || len(cursor.SessionID) > 4096 {
+		if !known || !cursor.Initialized || cursor.Offset < 0 || cursor.Offset > 1_000_000 || len(cursor.SessionID) > 4096 || strings.ContainsAny(cursor.SessionID, "\r\n\x00") || len(cursor.LastID) > 256 || len(cursor.PageSignature) > 64 {
 			delete(cloned.Feeds, name)
 		}
 	}
@@ -123,6 +125,18 @@ func hongguoCatalogHasMore(state *hongguoCatalogState) bool {
 	for _, genre := range hongguoAppGenres {
 		if state == nil || !state.Feeds[genre.key].Exhausted {
 			return true
+		}
+	}
+	return false
+}
+
+func hongguoCatalogCategoryHasMore(state *hongguoCatalogState, category string) bool {
+	if category == "" {
+		return hongguoCatalogHasMore(state)
+	}
+	for _, genre := range hongguoAppGenres {
+		if category == genre.key {
+			return state == nil || !state.Feeds["category:"+genre.key].Exhausted
 		}
 	}
 	return false
@@ -213,7 +227,7 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("红果 App 接口 HTTP %d", response.StatusCode)
+			lastErr = &httpStatusError{host: strings.ToLower(request.URL.Hostname()), status: response.StatusCode, reason: "红果 App 接口暂不可用"}
 			if response.StatusCode >= 400 && response.StatusCode < 500 {
 				return nil, lastErr
 			}

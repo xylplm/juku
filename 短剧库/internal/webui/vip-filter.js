@@ -1,8 +1,9 @@
 (() => {
   const key = 'juku.vip.show';
   let shown = false, enabled = false;
-  try {shown = localStorage.getItem(key) === 'true';} catch (_) {}
-  const isVIP = drama => drama?.vip === true;
+  shown = window.JukuPreferences?.read('vip.show', false) === true;
+  const source = drama => String(drama?.source || drama?.id || '').split(':', 1)[0].toLowerCase();
+  const isVIP = drama => drama?.vip === true && ['huangdou', 'tideember.cc', 'xqjurgek.top'].includes(source(drama));
   const visible = drama => shown || !isVIP(drama);
   function refresh() {
     for (const button of document.querySelectorAll('[data-vip-filter]')) {
@@ -19,7 +20,7 @@
   }
   function toggle() {
     if (!enabled) return;
-    try {localStorage.setItem(key, String(!shown));} catch (_) {}
+    window.JukuPreferences?.save('vip.show', !shown);
     changed(!shown, true);
   }
   function init(allowed) {
@@ -31,6 +32,7 @@
     refresh();
   }
   window.addEventListener('storage', event => {if (event.key === key) changed(event.newValue === 'true');});
+  window.JukuPreferences?.onChange(event => {if (event.keys.includes('vip.show')) changed(event.values['vip.show'] === true);});
   function summary(dramas) {
     const rows = dramas.filter(drama => drama.source === 'huangdou' || drama.id?.startsWith('huangdou:'));
     if (!rows.length) return '';

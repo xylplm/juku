@@ -131,11 +131,14 @@ func (a *UIApp) runSortMetadataQueue(ctx context.Context, done chan struct{}) {
 		if err != nil && ctx.Err() == nil {
 			a.downloader.recordDiagnostic(diagnosticEvent{Event: "metadata.failed", Source: dramaProvider(previous), DramaID: previous.ID, DramaTitle: previous.DisplayTitle(), Message: err.Error()})
 		}
-		patch.SortMetadata = &sortMetadataState{CheckedAt: time.Now()}
+		now := time.Now()
+		patch.SortMetadata = &sortMetadataState{CheckedAt: now}
 		if err == nil {
 			patch.SortMetadata.Version = dramaSortMetadataVersion(previous)
 			patch.SortMetadata.CoverChecked = dramaProvider(previous) == sourceHongguo
 			patch.SortMetadata.VIPChecked = dramaProvider(previous) == sourceHuangdou
+		} else {
+			patch.SortMetadata = failedSortMetadataState(previous, err, now)
 		}
 		normalizeDramaCover(&patch)
 		a.mu.Lock()

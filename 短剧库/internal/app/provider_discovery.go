@@ -48,7 +48,7 @@ func (d *Downloader) apiEndpoint(ctx context.Context) (string, error) {
 			}
 		}
 		for _, candidate := range candidates {
-			if seen[candidate] {
+			if seen[candidate] || time.Now().Before(d.apiFailures[candidate]) {
 				continue
 			}
 			seen[candidate] = true
@@ -68,6 +68,10 @@ func (d *Downloader) apiEndpoint(ctx context.Context) (string, error) {
 
 func (d *Downloader) resetAPIEndpoint(failed string) {
 	d.apiMu.Lock()
+	if d.apiFailures == nil {
+		d.apiFailures = map[string]time.Time{}
+	}
+	d.apiFailures[failed] = time.Now().Add(time.Minute)
 	if d.apiBase == failed {
 		d.apiBase = ""
 	}

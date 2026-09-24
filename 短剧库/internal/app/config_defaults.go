@@ -47,6 +47,11 @@ type Config struct {
 	HuangguoVideoURL      string `json:"huangguoVideoURL,omitempty"`
 	HuangdouURL           string `json:"huangdouURL,omitempty"`
 	HongguoURL            string `json:"hongguoURL,omitempty"`
+	HuangjuURL            string `json:"huangjuURL,omitempty"`
+	HuangjuAPIURL         string `json:"huangjuAPIURL,omitempty"`
+	YeguoURL              string `json:"yeguoURL,omitempty"`
+	YeguoAPIURL           string `json:"yeguoAPIURL,omitempty"`
+	DSDURL                string `json:"dsdURL,omitempty"`
 }
 
 func defaultConfig() Config {
@@ -58,7 +63,7 @@ func defaultConfig() Config {
 		Concurrency:        2,
 		RequestConcurrency: 2,
 		RequestIntervalMS:  500,
-		MaxPagesPerSort:    20,
+		MaxPagesPerSort:    50,
 		PageSize:           50,
 		Retries:            3,
 		SkipBytes:          512 * 1024,
@@ -104,7 +109,7 @@ func loadConfig(path string) Config {
 		cfg.RequestIntervalMS = 500
 	}
 	if cfg.MaxPagesPerSort <= 0 {
-		cfg.MaxPagesPerSort = 20
+		cfg.MaxPagesPerSort = 50
 	}
 	if cfg.PageSize <= 0 || cfg.PageSize > 100 {
 		cfg.PageSize = 50
@@ -135,6 +140,11 @@ func applyConfigEnvironment(cfg *Config) {
 	setIf(&cfg.HuangguoVideoURL, "JUKU_HUANGGUO_VIDEO_URL")
 	setIf(&cfg.HuangdouURL, "JUKU_HUANGDOU_URL")
 	setIf(&cfg.HongguoURL, "JUKU_HONGGUO_URL")
+	setIf(&cfg.HuangjuURL, "JUKU_HUANGJU_URL")
+	setIf(&cfg.HuangjuAPIURL, "JUKU_HUANGJU_API_URL")
+	setIf(&cfg.YeguoURL, "JUKU_YEGUO_URL")
+	setIf(&cfg.YeguoAPIURL, "JUKU_YEGUO_API_URL")
+	setIf(&cfg.DSDURL, "JUKU_DSD_URL")
 	setIf(&cfg.ProxyURL, "JUKU_PROXY_URL")
 	setIf(&cfg.OutputDir, "JUKU_OUTPUT_DIR")
 	setIf(&cfg.FFmpeg, "JUKU_FFMPEG")
@@ -150,7 +160,7 @@ func (c Config) validate() error {
 	if key, err := hex.DecodeString(c.AESKeyHex); c.AESKeyHex != "" && (err != nil || len(key) != aes.BlockSize) {
 		return errors.New("aesKeyHex 必须是 16 字节 AES 密钥的 hex 编码")
 	}
-	for _, endpoint := range []string{c.APIBase, c.HuangguoAIURL, c.HuangguoVideoURL, c.HuangdouURL, c.HongguoURL} {
+	for _, endpoint := range []string{c.APIBase, c.HuangguoAIURL, c.HuangguoVideoURL, c.HuangdouURL, c.HongguoURL, c.HuangjuURL, c.HuangjuAPIURL, c.YeguoURL, c.YeguoAPIURL, c.DSDURL} {
 		if endpoint != "" && !isProviderHTTPMediaURL(endpoint) {
 			return errors.New("站点地址必须是有效的 HTTP/HTTPS URL")
 		}

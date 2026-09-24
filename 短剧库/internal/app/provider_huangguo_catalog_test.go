@@ -50,12 +50,44 @@ func TestHuangguoVideoValidListAllowsEmptyCategories(t *testing.T) {
 			}
 			return rankingHTTPResponse(request, 200, body), nil
 		})
+		d.cfg.MaxPagesPerSort = 2
 		items, err := d.fetchHuangguoVideoDramas(context.Background())
-		if validList && (err != nil || len(items) != 1 || calls.Load() != 5) {
+		if validList && (err != nil || len(items) != 1 || calls.Load() != 6) {
 			t.Fatal("empty category rejected a valid catalog", err, len(items), calls.Load())
 		}
 		if !validList && (err == nil || len(items) != 0 || calls.Load() != 1) {
 			t.Fatal("empty main response was reported as a successful catalog", err, len(items), calls.Load())
+		}
+	}
+}
+
+func TestHuangguoVideoCatalogPaginatesConfiguredPages(t *testing.T) {
+	var queries []string
+	d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
+		query := request.URL.RawQuery
+		queries = append(queries, query)
+		values := request.URL.Query()
+		page := values.Get("page")
+		if page == "" {
+			page = "1"
+		}
+		category := values.Get("category")
+		if category == "" {
+			category = "0"
+		}
+		id := "fixture-c" + category + "-p" + page
+		body := `<article class="video-card"><a href="/series/` + id + `" title="纯文字目录样本 ` + id + `">目录样本</a></article>`
+		return rankingHTTPResponse(request, 200, body), nil
+	})
+	d.cfg.MaxPagesPerSort = 2
+	items, err := d.fetchHuangguoVideoDramas(context.Background())
+	if err != nil || len(items) != 10 {
+		t.Fatalf("paginated catalog failed: items=%d error=%v", len(items), err)
+	}
+	want := []string{"", "page=2", "category=1", "category=1&page=2", "category=2", "category=2&page=2", "category=3", "category=3&page=2", "category=4", "category=4&page=2"}
+	for index, query := range want {
+		if index >= len(queries) || queries[index] != query {
+			t.Fatalf("wrong paginated requests: got=%v want=%v", queries, want)
 		}
 	}
 }

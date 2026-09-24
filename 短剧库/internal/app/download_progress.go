@@ -31,21 +31,23 @@ func (w *cappedStringWriter) Write(p []byte) (int, error) {
 func (w *cappedStringWriter) String() string { return w.b.String() }
 
 type downloadProgressState struct {
-	mu          sync.Mutex
-	callbackMu  sync.Mutex
-	callback    func(DownloadProgress)
-	partPath    string
-	outPath     string
-	totalBytes  int64
-	mediaTotal  time.Duration
-	mediaDone   time.Duration
-	started     time.Time
-	lastSample  time.Time
-	lastBytes   int64
-	speed       float64
-	lastReport  time.Time
-	lastPercent int
-	lastPhase   string
+	mu              sync.Mutex
+	callbackMu      sync.Mutex
+	callback        func(DownloadProgress)
+	partPath        string
+	outPath         string
+	totalBytes      int64
+	mediaTotal      time.Duration
+	mediaDone       time.Duration
+	started         time.Time
+	lastSample      time.Time
+	lastBytes       int64
+	byteProgress    int64
+	hasByteProgress bool
+	speed           float64
+	lastReport      time.Time
+	lastPercent     int
+	lastPhase       string
 }
 
 func newDownloadProgressState(partPath, outPath string, totalBytes int64, callback func(DownloadProgress)) *downloadProgressState {
@@ -55,6 +57,28 @@ func newDownloadProgressState(partPath, outPath string, totalBytes int64, callba
 func (p *downloadProgressState) setMediaTotal(total time.Duration) {
 	p.mu.Lock()
 	p.mediaTotal = total
+	p.mu.Unlock()
+}
+
+func (p *downloadProgressState) setTotalBytes(total int64) {
+	if total <= 0 {
+		return
+	}
+	p.mu.Lock()
+	p.totalBytes = total
+	p.mu.Unlock()
+}
+
+func (p *downloadProgressState) setByteProgress(downloaded, total int64) {
+	if downloaded < 0 {
+		downloaded = 0
+	}
+	p.mu.Lock()
+	p.byteProgress = downloaded
+	p.hasByteProgress = true
+	if total > 0 {
+		p.totalBytes = total
+	}
 	p.mu.Unlock()
 }
 
@@ -73,7 +97,9 @@ func (p *downloadProgressState) snapshot(now time.Time, phase string) DownloadPr
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	bytesDownloaded := int64(0)
-	if st, err := os.Stat(p.partPath); err == nil && !st.IsDir() {
+	if p.hasByteProgress {
+		bytesDownloaded = p.byteProgress
+	} else if st, err := os.Stat(p.partPath); err == nil && !st.IsDir() {
 		bytesDownloaded = st.Size()
 	} else if phase == "completed" && p.outPath != "" {
 		if st, err := os.Stat(p.outPath); err == nil && !st.IsDir() {
