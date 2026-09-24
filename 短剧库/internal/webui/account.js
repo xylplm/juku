@@ -24,9 +24,13 @@ export function createAccount(app) {
     panel.setAttribute('aria-busy', String(value));
   }
 
-  function finish(message, error = false) {
+  function finish(message, error = false, target = '') {
     try { sessionStorage.setItem('juku.account.flash', JSON.stringify({message, error})); } catch (_) {}
     announceViewerChange();
+    if (target) {
+      location.assign(target);
+      return;
+    }
     location.reload();
   }
 
@@ -48,6 +52,10 @@ export function createAccount(app) {
       $('accountPasswordConfirm').value = '';
       app.viewer = await initializeViewer();
       if (!app.viewer.account) throw new Error('登录 Cookie 未保存，请允许此网站保存 Cookie 后重试');
+      if (app.viewer.account.requirePasswordChange) {
+        finish('已登录，请先修改初始密码。', false, '/login');
+        return;
+      }
       let message = registering ? '账号已创建，观看记录将跟随账号保存。' : '已登录 ' + app.viewer.account.username + '，个人记录已加载。';
       if (importRecords && app.viewer.guestImportAvailable) {
         try {

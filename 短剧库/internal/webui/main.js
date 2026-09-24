@@ -48,8 +48,8 @@ async function initialize() {
     notice.hidden = false;
     return;
   }
-  await window.JukuPreferences?.init();
 if (app.account.init()) return;
+await window.JukuPreferences?.init();
 app.users.init();
 app.emby.init();
 app.shell.access();
