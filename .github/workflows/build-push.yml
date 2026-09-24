@@ -45,10 +45,23 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
 
+      - name: Locate build context
+        id: ctx
+        run: |
+          if [ -f ./Dockerfile ]; then
+            echo "context=." >> "$GITHUB_OUTPUT"
+          elif [ -f ./短剧库/Dockerfile ]; then
+            echo "context=./短剧库" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::未找到 Dockerfile（已检查 ./ 和 ./短剧库/）"
+            exit 1
+          fi
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ steps.ctx.outputs.context }}
+          file: ${{ steps.ctx.outputs.context }}/Dockerfile
           platforms: linux/amd64 # 专门针对绿联 DXP4800 Plus 的架构
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

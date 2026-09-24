@@ -38,15 +38,23 @@ jobs:
             -exec rm -rf {} +
 
           # 2. 解压到临时目录
-          mkdir -p temp_extract
-          unzip -o 短剧库.zip -d temp_extract
+          rm -rf temp_extract
+          mkdir temp_extract
+          unzip -q -o 短剧库.zip -d temp_extract
 
-          # 3. 如果 zip 内嵌套了根目录，把内容移出来（扁平化）
-          if [ $(ls temp_extract | wc -l) -eq 1 ]; then
-            mv temp_extract/*/* . 2>/dev/null || mv temp_extract/* . 
+          # 清除 macOS 压缩包自带的垃圾目录和 .DS_Store
+          rm -rf temp_extract/__MACOSX
+          find temp_extract -name .DS_Store -delete
+
+          # 3. 扁平化：去掉垃圾后若只剩一个根目录，把其内容（含隐藏文件）移到仓库根
+          shopt -s dotglob nullglob
+          entries=(temp_extract/*)
+          if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
+            mv "${entries[0]}"/* .
           else
-            mv temp_extract/* . 
+            mv "${entries[@]}" .
           fi
+          shopt -u dotglob nullglob
 
           # 4. 清理临时文件
           rm -rf temp_extract 短剧库.zip
