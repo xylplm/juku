@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,7 +147,7 @@ func (d *Downloader) writeLibraryTVShowNFO(directory string, drama Drama, total 
 		Episode:   total,
 		UniqueID:  nfoUniqueID{Type: "juku", Default: true, Value: drama.ID},
 	}
-	if cover := bestDramaCover(drama); cover != "" {
+	if cover := libraryHTTPCover(drama); cover != "" {
 		payload.Thumbs = []nfoArtwork{{Aspect: "poster", URL: cover}}
 	}
 	return writeNFOFile(filepath.Join(directory, "tvshow.nfo"), payload)
@@ -185,25 +187,64 @@ func (d *Downloader) writeLibraryEpisodeNFOs(directory string, drama Drama, chap
 	}
 }
 
-func (d *Downloader) writeLibraryPoster(ctx context.Context, directory string, drama Drama) error {
-	for _, name := range libraryPosterNames {
-		if info, err := os.Lstat(filepath.Join(directory, name)); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			return nil
+// libraryCoverCandidates 收集 Drama 上全部封面候选。详情接口缓存可能带有
+// 非绝对地址的劣质封面并遮蔽剧库列表里的有效封面，因此不能只取第一个结果。
+func libraryCoverCandidates(drama Drama) []string {
+	var out []string
+	seen := map[string]bool{}
+	appendCandidate := func(c string) {
+		if c == "" || seen[c] {
+			return
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	var walk func(v any)
+	walk = func(v any) {
+		switch item := v.(type) {
+		case string:
+			s := strings.TrimSpace(item)
+			if s == "" {
+				return
+			}
+			if strings.HasPrefix(s, "/api/ui/image") {
+				if u, err := url.Parse(s); err == nil {
+					if raw := strings.TrimSpace(u.Query().Get("url")); raw != "" {
+						appendCandidate(raw)
+						return
+					}
+				}
+			}
+			appendCandidate(s)
+		case map[string]any:
+			for _, key := range []string{"url", "src", "path", "cover", "coverUrl", "cover_url", "image", "pic", "poster"} {
+				walk(item[key])
+			}
+		case []any:
+			for _, entry := range item {
+				walk(entry)
+			}
 		}
 	}
-	source := firstNonEmpty(drama.Source, sourceFromDramaID(drama.ID), "cloudfront")
-	cover := bestDramaCover(drama)
-	if !strings.HasPrefix(cover, "http://") && !strings.HasPrefix(cover, "https://") {
-		repaired, err := d.fetchDramaCoverAddress(ctx, drama)
-		if err != nil {
-			return fmt.Errorf("缺少可用封面地址：%w", err)
+	for _, v := range []any{drama.CoverURL, drama.CoverURLSnake, drama.Cover, drama.ImageURL, drama.ImageURLSnake, drama.Image, drama.Img, drama.Pic, drama.Picture, drama.Poster, drama.Thumb, drama.Thumbnail} {
+		walk(v)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.HasPrefix(out[i], "http") && !strings.HasPrefix(out[j], "http")
+	})
+	return out
+}
+
+func libraryHTTPCover(drama Drama) string {
+	for _, cover := range libraryCoverCandidates(drama) {
+		if strings.HasPrefix(cover, "http://") || strings.HasPrefix(cover, "https://") {
+			return cover
 		}
-		cover = repaired
 	}
-	data, err := d.fetchLibraryCoverBytes(ctx, cover, source)
-	if err != nil {
-		return err
-	}
+	return ""
+}
+
+func writePosterFile(directory string, data []byte) error {
 	extension := ".jpg"
 	switch imageContentType(data) {
 	case "image/png":
@@ -215,6 +256,41 @@ func (d *Downloader) writeLibraryPoster(ctx context.Context, directory string, d
 		return errors.New("封面图片格式不受支持")
 	}
 	return os.WriteFile(filepath.Join(directory, "poster"+extension), data, 0644)
+}
+
+func (d *Downloader) writeLibraryPoster(ctx context.Context, directory string, drama Drama) error {
+	for _, name := range libraryPosterNames {
+		if info, err := os.Lstat(filepath.Join(directory, name)); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return nil
+		}
+	}
+	source := firstNonEmpty(drama.Source, sourceFromDramaID(drama.ID), "cloudfront")
+	var lastErr error
+	for _, cover := range libraryCoverCandidates(drama) {
+		if !strings.HasPrefix(cover, "http://") && !strings.HasPrefix(cover, "https://") {
+			continue
+		}
+		data, err := d.fetchLibraryCoverBytes(ctx, cover, source)
+		if err == nil {
+			return writePosterFile(directory, data)
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	repaired, err := d.fetchDramaCoverAddress(ctx, drama)
+	if err != nil {
+		if lastErr != nil {
+			return lastErr
+		}
+		return fmt.Errorf("缺少可用封面地址：%w", err)
+	}
+	data, err := d.fetchLibraryCoverBytes(ctx, repaired, source)
+	if err != nil {
+		return err
+	}
+	return writePosterFile(directory, data)
 }
 
 func (d *Downloader) fetchLibraryCoverBytes(ctx context.Context, remoteURL, source string) ([]byte, error) {
