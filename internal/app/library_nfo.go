@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -87,7 +88,11 @@ func writeNFOFile(path string, payload any) error {
 		return err
 	}
 	data := append([]byte(xml.Header), body...)
-	return os.WriteFile(path, append(data, '\n'), 0644)
+	data = append(data, '\n')
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 func libraryNFOGenres(drama Drama) []string {
