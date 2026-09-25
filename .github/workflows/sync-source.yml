@@ -63,6 +63,24 @@ jobs:
           echo "✅ 同步完成，当前目录结构："
           ls -la
 
+      - name: Apply local patches
+        run: |
+          shopt -s nullglob
+          patches=(.github/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "无本地补丁，跳过"
+            exit 0
+          fi
+          for p in "${patches[@]}"; do
+            echo "🩹 应用本地补丁：$p"
+            if ! git apply -C1 --whitespace=nowarn --check "$p"; then
+              echo "::error::$p 无法应用到最新源码（上游 zip 代码可能已改动），需要人工更新补丁"
+              exit 1
+            fi
+            git apply -C1 --whitespace=nowarn "$p"
+          done
+          echo "✅ 全部补丁应用成功"
+
       - name: Check for changes
         id: check
         run: |

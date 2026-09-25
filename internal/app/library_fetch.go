@@ -166,6 +166,7 @@ func (d *Downloader) buildDramaTasksInDirectory(ctx context.Context, drama Drama
 	if err != nil {
 		return nil, err
 	}
+	go d.writeDramaMetadataFiles(dramaDir, drama, chapters)
 	var tasks []Task
 	for i, ch := range chapters {
 		ep := ch.EpisodeString(i + 1)

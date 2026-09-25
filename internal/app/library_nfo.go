@@ -1,0 +1,264 @@
+package app
+
+import (
+	"context"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// 下载目录元数据：为每部剧生成 tvshow.nfo、poster 封面与分集 NFO，
+// 遵循 Jellyfin/Emby/Kodi 通用的本地刮削标准。
+// 由 buildDramaTasksInDirectory 在确定剧集目录后异步触发，尽力而为，失败不影响下载。
+
+var nfoSingleFlight sync.Map
+
+var libraryPosterNames = []string{"poster.jpg", "poster.jpeg", "poster.png", "poster.webp"}
+
+type nfoUniqueID struct {
+	Type    string `xml:"type,attr"`
+	Default bool   `xml:"default,attr"`
+	Value   string `xml:",chardata"`
+}
+
+type nfoArtwork struct {
+	Aspect string `xml:"aspect,attr,omitempty"`
+	URL    string `xml:",chardata"`
+}
+
+type tvshowNFO struct {
+	XMLName   xml.Name     `xml:"tvshow"`
+	Title     string       `xml:"title"`
+	ShowTitle string       `xml:"showtitle"`
+	Plot      string       `xml:"plot,omitempty"`
+	Genres    []string     `xml:"genre,omitempty"`
+	Premiered string       `xml:"premiered,omitempty"`
+	Status    string       `xml:"status,omitempty"`
+	Studio    string       `xml:"studio,omitempty"`
+	Episode   int          `xml:"episode"`
+	UniqueID  nfoUniqueID  `xml:"uniqueid"`
+	Thumbs    []nfoArtwork `xml:"thumb"`
+}
+
+type episodeNFO struct {
+	XMLName   xml.Name    `xml:"episodedetails"`
+	Title     string      `xml:"title"`
+	ShowTitle string      `xml:"showtitle"`
+	Season    int         `xml:"season"`
+	Episode   int         `xml:"episode"`
+	UniqueID  nfoUniqueID `xml:"uniqueid"`
+}
+
+func (d *Downloader) writeDramaMetadataFiles(directory string, drama Drama, chapters []Chapter) {
+	if directory == "" || drama.ID == "" {
+		return
+	}
+	if _, running := nfoSingleFlight.LoadOrStore(drama.ID, struct{}{}); running {
+		return
+	}
+	defer nfoSingleFlight.Delete(drama.ID)
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf(" 《%s》生成 NFO 元数据异常：%v\n", drama.DisplayTitle(), r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := d.writeLibraryTVShowNFO(directory, drama, len(chapters)); err != nil {
+		fmt.Printf(" 《%s》写入 tvshow.nfo 失败：%v\n", drama.DisplayTitle(), err)
+	}
+	d.writeLibraryEpisodeNFOs(directory, drama, chapters)
+	if err := d.writeLibraryPoster(ctx, directory, drama); err != nil {
+		fmt.Printf(" 《%s》封面写入失败：%v\n", drama.DisplayTitle(), err)
+	}
+}
+
+func writeNFOFile(path string, payload any) error {
+	body, err := xml.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	data := append([]byte(xml.Header), body...)
+	return os.WriteFile(path, append(data, '\n'), 0644)
+}
+
+func libraryNFOGenres(drama Drama) []string {
+	candidates := []string{drama.CategoryName, drama.CategoryNameSnake, drama.TypeName, drama.TypeNameSnake}
+	candidates = append(candidates, drama.Tags...)
+	var genres []string
+	seen := map[string]bool{}
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		genres = append(genres, name)
+		if len(genres) >= 3 {
+			break
+		}
+	}
+	return genres
+}
+
+func libraryNFOPremiered(drama Drama) string {
+	date := strings.TrimSpace(drama.OnlineDate)
+	if len(date) == 10 && date[4] == '-' && date[7] == '-' {
+		return date
+	}
+	return ""
+}
+
+func libraryNFOStatus(drama Drama) string {
+	switch dramaReleaseStatus(drama) {
+	case "finished":
+		return "Ended"
+	case "ongoing":
+		return "Continuing"
+	}
+	return ""
+}
+
+func (d *Downloader) writeLibraryTVShowNFO(directory string, drama Drama, total int) error {
+	plot := firstNonEmpty(strings.TrimSpace(drama.Desc), strings.TrimSpace(drama.Intro))
+	payload := tvshowNFO{
+		Title:     drama.DisplayTitle(),
+		ShowTitle: drama.DisplayTitle(),
+		Plot:      plot,
+		Genres:    libraryNFOGenres(drama),
+		Premiered: libraryNFOPremiered(drama),
+		Status:    libraryNFOStatus(drama),
+		Studio:    dramaSourceFolder(drama),
+		Episode:   total,
+		UniqueID:  nfoUniqueID{Type: "juku", Default: true, Value: drama.ID},
+	}
+	if cover := bestDramaCover(drama); cover != "" {
+		payload.Thumbs = []nfoArtwork{{Aspect: "poster", URL: cover}}
+	}
+	return writeNFOFile(filepath.Join(directory, "tvshow.nfo"), payload)
+}
+
+func (d *Downloader) writeLibraryEpisodeNFOs(directory string, drama Drama, chapters []Chapter) {
+	for i, ch := range chapters {
+		episode := ch.EpisodeString(i + 1)
+		number, err := strconv.Atoi(strings.TrimSpace(episode))
+		if err != nil || number <= 0 {
+			number = i + 1
+		}
+		base := padEpisode(episode)
+		path := filepath.Join(directory, base+".nfo")
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			continue
+		}
+		title := strings.TrimSpace(ch.Title)
+		if title == "" {
+			if number == i+1 && strings.TrimSpace(episode) != strconv.Itoa(number) {
+				title = strings.TrimSpace(episode)
+			} else {
+				title = fmt.Sprintf("第%d集", number)
+			}
+		}
+		payload := episodeNFO{
+			Title:     title,
+			ShowTitle: drama.DisplayTitle(),
+			Season:    1,
+			Episode:   number,
+			UniqueID:  nfoUniqueID{Type: "juku", Default: true, Value: fmt.Sprintf("%s-E%d", drama.ID, number)},
+		}
+		if err := writeNFOFile(path, payload); err != nil {
+			fmt.Printf(" 《%s》写入 %s 失败：%v\n", drama.DisplayTitle(), base+".nfo", err)
+			return
+		}
+	}
+}
+
+func (d *Downloader) writeLibraryPoster(ctx context.Context, directory string, drama Drama) error {
+	for _, name := range libraryPosterNames {
+		if info, err := os.Lstat(filepath.Join(directory, name)); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return nil
+		}
+	}
+	source := firstNonEmpty(drama.Source, sourceFromDramaID(drama.ID), "cloudfront")
+	cover := bestDramaCover(drama)
+	if !strings.HasPrefix(cover, "http://") && !strings.HasPrefix(cover, "https://") {
+		repaired, err := d.fetchDramaCoverAddress(ctx, drama)
+		if err != nil {
+			return fmt.Errorf("缺少可用封面地址：%w", err)
+		}
+		cover = repaired
+	}
+	data, err := d.fetchLibraryCoverBytes(ctx, cover, source)
+	if err != nil {
+		return err
+	}
+	extension := ".jpg"
+	switch imageContentType(data) {
+	case "image/png":
+		extension = ".png"
+	case "image/webp":
+		extension = ".webp"
+	case "image/jpeg":
+	default:
+		return errors.New("封面图片格式不受支持")
+	}
+	return os.WriteFile(filepath.Join(directory, "poster"+extension), data, 0644)
+}
+
+func (d *Downloader) fetchLibraryCoverBytes(ctx context.Context, remoteURL, source string) ([]byte, error) {
+	if remoteURL == "" {
+		return nil, errors.New("封面地址为空")
+	}
+	referer := d.sourceCoverReferer(source, remoteURL)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !validImageURL(request.URL) {
+		return nil, errors.New("封面地址不受支持")
+	}
+	request.Header.Set("Referer", referer)
+	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("Accept", "image/webp,image/jpeg,image/png,image/gif,*/*;q=0.5")
+	client := *d.client
+	client.Timeout = 30 * time.Second
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 5 || !validImageURL(request.URL) {
+			return errors.New("封面重定向地址不受支持")
+		}
+		request.Header.Set("Referer", referer)
+		return nil
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("封面上游 HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > maxCoverBytes {
+		return nil, errors.New("封面文件过大")
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxCoverBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCoverBytes {
+		return nil, errors.New("封面文件过大")
+	}
+	if isHEICImage(data) {
+		return d.convertHEICCover(ctx, data)
+	}
+	if !isKnownImage(data) {
+		return nil, errors.New("封面内容无效，请检查代理或站点是否需要验证")
+	}
+	return data, nil
+}
