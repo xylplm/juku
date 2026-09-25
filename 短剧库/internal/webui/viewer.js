@@ -18,7 +18,11 @@ export function viewerHeaders() {
 }
 
 export function checkViewerResponse(result) {
-  if (!identity || changed || !['viewer_required', 'viewer_changed', 'login_required', 'password_change_required', 'sources_changed', 'permissions_changed'].includes(result?.code)) return;
+  if (result?.code === 'password_change_required') {
+    if (location.pathname !== '/login') location.assign('/login');
+    return;
+  }
+  if (!identity || changed || !['viewer_required', 'viewer_changed', 'login_required', 'sources_changed', 'permissions_changed'].includes(result?.code)) return;
   changed = true;
   window.dispatchEvent(new Event('jukuviewerchange'));
 }
